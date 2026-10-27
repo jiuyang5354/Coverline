@@ -933,11 +933,20 @@ namespace Coverline
                 next.Enabled = np.CanNext;
             }
             UpdateControlsVisibility(animate);
-            ToolTip = np.HasSession ? (np.Title + (np.Artist.Length > 0 ? " — " + np.Artist : "")) : null;
+            ToolTip = np.HasSession ? (np.Title + (np.Artist.Length > 0 ? " — " + np.Artist : "")) :
+                np.NeteaseHint ? "网易云音乐原版不向 Windows 报告正在播放。安装 BetterNCM + InfLink-rs 插件后即可显示封面和进度。" : null;
         }
 
         private void FillText(NowPlaying np)
         {
+            if (!np.HasSession && np.NeteaseHint)
+            {
+                label.Text = "NETEASE MUSIC";
+                labelDot.Fill = theme.AccentIdle;
+                title.Text = "网易云音乐未接入";
+                artist.Text = "需安装 InfLink-rs 插件，托盘菜单有链接";
+                return;
+            }
             if (!np.HasSession)
             {
                 label.Text = "NOTHING PLAYING";

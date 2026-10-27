@@ -181,6 +181,11 @@ namespace Coverline
             m.Items.Add(installItem);
 
             m.Items.Add(new Forms.ToolStripSeparator());
+            m.Items.Add("网易云音乐支持（InfLink-rs）NetEase Cloud Music…", null, delegate
+            {
+                try { System.Diagnostics.Process.Start(MediaWatcher.NeteasePluginUrl); }
+                catch (Exception ex) { Log.Write("open InfLink-rs: " + ex.Message); }
+            });
             m.Items.Add("关于 " + AppInfo.Name, null, delegate
             {
                 MessageBox.Show(AppInfo.Name + " " + AppInfo.Version +

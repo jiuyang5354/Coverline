@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -27,10 +28,13 @@ namespace Coverline
         public bool CanPrevious;
         public BitmapSource Art;
         public string ArtKey = "";
+        // Nothing reports to SMTC, but NetEase Cloud Music (cloudmusic.exe) is running: its Win32 client
+        // doesn't publish now-playing to Windows unless the InfLink-rs plugin (via BetterNCM) is installed.
+        public bool NeteaseHint;
 
         public string TextKey
         {
-            get { return HasSession ? Title + "\u001f" + Artist : ""; }
+            get { return HasSession ? Title + "\u001f" + Artist : (NeteaseHint ? "\u001fncm" : ""); }
         }
     }
 
@@ -127,7 +131,7 @@ namespace Coverline
             sessionId = id;
             if (session == null)
             {
-                Publish(NowPlaying.Empty);
+                Publish(NeteaseRunning() ? new NowPlaying { NeteaseHint = true } : NowPlaying.Empty);
                 return;
             }
             try
@@ -153,6 +157,20 @@ namespace Coverline
             catch { }
             session = null;
             sessionId = "";
+        }
+
+        public const string NeteasePluginUrl = "https://github.com/apoint123/inflink-rs";
+
+        private static bool NeteaseRunning()
+        {
+            try
+            {
+                Process[] procs = Process.GetProcessesByName("cloudmusic");
+                bool any = procs.Length > 0;
+                foreach (var p in procs) p.Dispose();
+                return any;
+            }
+            catch { return false; }
         }
 
         private static bool IsPlaying(GlobalSystemMediaTransportControlsSession s)

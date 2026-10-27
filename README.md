@@ -43,6 +43,20 @@ A now-playing widget for the Windows desktop: album art, title and artist sit qu
 
 在 [Releases](../../releases) 下载 `Coverline-Windows-vX.Y.Z.zip`，解压后运行 `Coverline.exe`。程序常驻托盘，无需安装。需要 Windows 10 1809 或更高版本 / Windows 11（系统自带 .NET Framework 4.8）。
 
+## 网易云音乐 NetEase Cloud Music
+
+网易云音乐 Windows 原版（Win32 客户端）**不向系统报告正在播放**，Coverline（以及 Windows 音量浮窗）读不到它。装上开源插件 [InfLink-rs](https://github.com/apoint123/inflink-rs) 后就能显示曲名、封面和播放进度，上一首 / 下一首也能用：
+
+1. 安装 [BetterNCM](https://github.com/std-microblock/BetterNCM-Installer/releases/latest)（网易云音乐的插件管理器）。
+2. 在 BetterNCM 插件商店里搜索并安装 **InfLink-rs**（或从它的 Release 页下载 `.plugin` 文件放进 `C:\betterncm\plugins`）。
+3. 按提示重启网易云音乐。
+
+注意只装 InfLink-rs，不要同时装旧版 InfLink，否则可能冲突。InfLink-rs 只在部分网易云版本上测试过（以其 README 为准）。
+
+v0.3.2 起，网易云音乐在运行但没有向系统报告时，组件会显示「网易云音乐未接入」，托盘菜单「网易云音乐支持（InfLink-rs）」直接打开插件页面。
+
+**NetEase Cloud Music**: the stock Win32 client doesn't report now-playing to Windows, so Coverline can't see it. Install BetterNCM, then the InfLink-rs plugin from its store, and restart NetEase Cloud Music; title, art, progress and controls then work. Don't install the old InfLink alongside it. From v0.3.2, the widget shows a hint when cloudmusic.exe is running without reporting, and Tray → NetEase Cloud Music opens the plugin page.
+
 ## 自动更新 Auto update（v0.3+）
 
 - 启动 30 秒后检查一次，之后每 6 小时检查一次本仓库的 [Releases](../../releases)（包括预发布版本）。
@@ -82,7 +96,7 @@ dotnet build -c Release
 ## 已知限制
 
 - 「贴在桌面层」是把窗口放在所有窗口最下方；按 Win+D 显示桌面时组件会和其他窗口一起被收起。
-- 只有向 Windows 媒体控件报告信息的播放器才能显示；少数播放器不提供封面或不支持上一首。
+- 只有向 Windows 媒体控件报告信息的播放器才能显示；少数播放器不提供封面或不支持上一首。网易云音乐需要装 InfLink-rs 插件（见上文）。
 - 标题衬线字体优先使用 Noto Serif SC / 思源宋体，未安装时退回 Georgia + 宋体。
 - 目前位置按主显示器坐标记忆；拔掉外接显示器后，如果组件不在可见区域会自动回到底部居中。
 - 液态玻璃为了让 DWM 在窗口背后画模糊，使用普通（非分层）窗口 + 圆角窗口区域：因此没有外投影，大圆角边缘在 100% 缩放下可能有轻微锯齿；Windows 10 的 accent 亚克力在拖动窗口时可能略有延迟。
