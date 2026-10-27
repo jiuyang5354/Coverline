@@ -1,0 +1,21 @@
+{
+  "version": "0.3.2",
+  "tag": "v0.3.2",
+  "zip": "Coverline-Windows-v0.3.2.zip",
+  "sha256": "9967459ecafcb48638967e894be45a63180d24fbf27b2830eeb3812b6d5b3136",
+  "size": 69999,
+  "published_at": "2026-10-27T16:29:36Z",
+  "html_url": "https://github.com/jiuyang5354/Coverline/releases/tag/v0.3.2",
+  "assets": [
+    {
+      "name": "Coverline-Windows-v0.3.2.zip",
+      "url": "https://github.com/jiuyang5354/Coverline/releases/download/v0.3.2/Coverline-Windows-v0.3.2.zip",
+      "size": 69999
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "url": "https://github.com/jiuyang5354/Coverline/releases/download/v0.3.2/SHA256SUMS.txt",
+      "size": 96
+    }
+  ]
+}
