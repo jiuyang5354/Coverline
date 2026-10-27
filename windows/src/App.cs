@@ -54,6 +54,7 @@ namespace Coverline
             updater = new Updater(a => Application.Current.Dispatcher.BeginInvoke(a));
             updater.IsIdle = () => !media.Current.IsPlaying && !widget.IsHovering && !menu.Visible;
             updater.AutoEnabled = () => settings.AutoUpdate;
+            updater.Mirrors = () => settings.UpdateMirrors;
             updater.Notify += (text, click) => ShowBalloon(text, click);
             updater.StateChanged += UpdateInstallItem;
             updater.ExitRequested += () => Application.Current.Shutdown();

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Serialization;
@@ -35,6 +36,9 @@ namespace Coverline
         [DataMember(Name = "userMoved")] public bool UserMoved;
         // Check GitHub Releases, download in the background and install when idle (v0.3+).
         [DataMember(Name = "autoUpdate")] public bool AutoUpdate;
+        // Optional (v0.3.1+): download proxy prefixes tried after github.com, e.g. "https://ghfast.top/".
+        // Missing = built-in list; [] = github.com only. Only edited by hand, never written unless set.
+        [DataMember(Name = "updateMirrors", EmitDefaultValue = false)] public List<string> UpdateMirrors;
 
         public Settings()
         {
@@ -63,6 +67,7 @@ namespace Coverline
             Backdrop = GlassBackdrop.Auto.ToString();
             UserMoved = false;
             AutoUpdate = true;
+            UpdateMirrors = null;
         }
 
         public ThemeKind ThemeValue

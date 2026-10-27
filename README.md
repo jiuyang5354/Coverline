@@ -53,6 +53,19 @@ A now-playing widget for the Windows desktop: album art, title and artist sit qu
 - 日志：`%LocalAppData%\Coverline\update.log`。网络不可用、超时或 GitHub 限流时静默跳过，下次再试。
 - **v0.2.0 及更早的版本没有自动更新**：请手动下载一次 v0.3.0 覆盖旧文件，之后的版本都会自动更新。
 
+### 连不上 GitHub 时的备用源（v0.3.1+）
+
+在中国大陆等访问 GitHub 不稳定的网络里，自动更新会自己换路：
+
+1. **版本信息**：先查 GitHub API（8 秒超时）；失败就依次读 jsDelivr 上的 `latest.json`（`cdn.jsdelivr.net` → `fastly.jsdelivr.net` → `testingcf.jsdelivr.net`）。这个文件由 CI 在每次发布后写进本仓库的 `update-feed` 分支，含版本号、zip 名和 SHA-256。
+2. **下载 zip**：先从 github.com 原地址下载；失败就依次通过公共下载代理（默认 `https://ghfast.top/`、`https://gh-proxy.com/`、`https://ghproxy.net/`、`https://gh.llkk.cc/`，拼接方式为「前缀 + 完整 GitHub 下载地址」），每个来源单独超时。
+3. **安全**：SHA-256 只采信 GitHub（API 摘要或 `SHA256SUMS.txt`）或 jsDelivr 的 `latest.json`；不管从哪个代理下载，哈希对不上（包括代理返回的错误网页）就丢弃并换下一个来源。`update.log` 会记录这次用了哪个来源。
+4. **自定义代理**：在 `%AppData%\Coverline\settings.json` 里加 `"updateMirrors": ["https://你的代理/"]` 可替换默认列表（写 `[]` 表示只用 github.com）。请先退出 Coverline 再编辑（运行中保存设置会覆盖手动修改），改完重新打开即可。
+
+公共代理由第三方维护，可能随时失效或变慢；全部失败时会静默跳过，下次再试，也可以手动从 Releases 下载。jsDelivr 对分支文件有缓存，新版本发布后备用源可能晚几个小时才看到。**v0.3.0 只会走 GitHub**：需要能连上 GitHub 一次升级到 v0.3.1，之后才有备用源。
+
+**Fallbacks when GitHub is unreachable (v0.3.1+)**: if the GitHub API fails (8 s timeout), Coverline reads `latest.json` from this repo's `update-feed` branch via jsDelivr (cdn → fastly → testingcf), written by CI on every release. The zip is fetched from github.com first, then through public download proxies (`ghfast.top`, `gh-proxy.com`, `ghproxy.net`, `gh.llkk.cc` by default; prefix + full GitHub URL), each with its own timeout. The SHA-256 is only ever taken from GitHub or the jsDelivr `latest.json`; any copy that doesn't match — including a proxy's HTML error page — is discarded and the next source is tried. `update.log` records which source was used. Override the proxy list with `"updateMirrors": [...]` in `%AppData%\Coverline\settings.json` (`[]` = github.com only; quit Coverline before editing). Public proxies come and go; jsDelivr may lag a new release by a few hours. v0.3.0 only knows GitHub, so it needs to reach GitHub once to get v0.3.1.
+
 **Auto update (v0.3+)**: Coverline checks this repo's Releases (prereleases included) 30 seconds after launch and every 6 hours, downloads the new zip to `%LocalAppData%\Coverline\updates\`, verifies it against `SHA256SUMS.txt`, and installs it when idle — nothing playing and the pointer not on the widget — by quitting, swapping the files (old exe kept as `Coverline.old.exe`, rolled back on failure) and relaunching. You get a "Updated to vX.Y.Z" balloon afterwards. Tray → Check for updates / Auto update (on by default). If the folder isn't writable (e.g. Program Files) it never asks for admin rights; it notifies you and opens the Releases page instead. Log: `%LocalAppData%\Coverline\update.log`. **v0.2.0 and earlier can't update themselves: download v0.3.0 once by hand; updates are automatic from then on.**
 
 ## 构建

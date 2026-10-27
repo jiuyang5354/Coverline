@@ -39,8 +39,11 @@ jobs:
           Copy-Item LICENSE, README.md -Destination $stage
           $zip = "$env:APP-Windows-$version.zip"
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
-          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() + '  ' + $zip | Set-Content SHA256SUMS.txt -Encoding ascii
+          $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          $sha + '  ' + $zip | Set-Content SHA256SUMS.txt -Encoding ascii
           "zip=$zip" | Add-Content $env:GITHUB_OUTPUT
+          "sha256=$sha" | Add-Content $env:GITHUB_OUTPUT
+          "size=$((Get-Item $zip).Length)" | Add-Content $env:GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP }}-Windows
@@ -54,3 +57,57 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create $env:GITHUB_REF_NAME '${{ steps.pkg.outputs.zip }}' SHA256SUMS.txt --title "$env:APP $env:GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md --prerelease
+      # Backup update source for networks that can't reach GitHub: latest.json on the orphan branch
+      # update-feed (force-pushed, only that file), served by jsDelivr. Coverline 0.3.1+ reads it when
+      # the GitHub API fails and trusts its sha256.
+      - name: Update feed (latest.json -> update-feed branch, jsDelivr)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ZIP: ${{ steps.pkg.outputs.zip }}
+          SHA: ${{ steps.pkg.outputs.sha256 }}
+          SIZE: ${{ steps.pkg.outputs.size }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME
+          $repo = $env:GITHUB_REPOSITORY
+          $base = "https://github.com/$repo/releases/download/$tag/"
+          $feed = [ordered]@{
+            version      = $tag.TrimStart('v')
+            tag          = $tag
+            zip          = $env:ZIP
+            sha256       = $env:SHA
+            size         = [long]$env:SIZE
+            published_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            html_url     = "https://github.com/$repo/releases/tag/$tag"
+            assets       = @(
+              [ordered]@{ name = $env:ZIP; url = $base + $env:ZIP; size = [long]$env:SIZE },
+              [ordered]@{ name = 'SHA256SUMS.txt'; url = $base + 'SHA256SUMS.txt'; size = (Get-Item SHA256SUMS.txt).Length }
+            )
+          }
+          $dir = Join-Path $env:RUNNER_TEMP 'update-feed'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $json = $feed | ConvertTo-Json -Depth 5
+          [IO.File]::WriteAllText((Join-Path $dir 'latest.json'), $json + "`n", (New-Object Text.UTF8Encoding $false))
+          Get-Content (Join-Path $dir 'latest.json')
+          Push-Location $dir
+          git init -q -b update-feed
+          git add latest.json
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -q -m "update feed: $tag"
+          git push --force "https://x-access-token:$($env:GH_TOKEN)@github.com/$repo.git" update-feed
+          if ($LASTEXITCODE -ne 0) { throw 'push to update-feed failed' }
+          Pop-Location
+          # jsDelivr caches branch files for up to ~12-24 h; ask it to refresh, then check (warn only).
+          $path = "gh/$repo@update-feed/latest.json"
+          $ok = $false
+          for ($i = 0; $i -lt 6 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 10
+            try { Invoke-RestMethod "https://purge.jsdelivr.net/$path" | ConvertTo-Json -Compress | Write-Host } catch { Write-Host "purge: $($_.Exception.Message)" }
+            try {
+              $got = Invoke-RestMethod "https://cdn.jsdelivr.net/$($path)?t=$([DateTime]::UtcNow.Ticks)" -Headers @{ 'Cache-Control' = 'no-cache' }
+              Write-Host "jsDelivr serves $($got.tag)"
+              $ok = ($got.tag -eq $tag)
+            } catch { Write-Host "jsDelivr: $($_.Exception.Message)" }
+          }
+          if (-not $ok) { Write-Host "::warning::jsDelivr does not serve $tag yet (cache); it will catch up" }

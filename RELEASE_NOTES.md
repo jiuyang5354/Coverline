@@ -1,12 +1,13 @@
-Coverline v0.3：自动更新。
+Coverline v0.3.1：连不上 GitHub 时自动更新也能用。
 
-- 新增自动更新：启动 30 秒后、之后每 6 小时检查 GitHub Releases（包括预发布版），后台下载并用 SHA256SUMS.txt 校验，没有播放音乐且鼠标不在组件上时静默重启完成更新；旧版备份为 Coverline.old.exe，替换失败自动回滚。更新后首次启动会提示「已更新到 vX.Y.Z」。
-- 托盘菜单新增：当前版本号、「检查更新」（立即检查，气泡显示结果；下载好后点气泡可立即更新）、「自动更新」开关（默认开启）。
-- 安装目录不可写（如 Program Files）时不会请求管理员权限，只提示并打开 Releases 页面。
-- 离线、超时、GitHub 限流时静默跳过；日志写在 %LocalAppData%\Coverline\update.log。
+- 检查更新时先查 GitHub API（8 秒超时），失败就改读 jsDelivr 上的 `latest.json`（本仓库 `update-feed` 分支，CI 每次发布后自动更新；cdn / fastly / testingcf 三个域名依次尝试）。
+- 下载更新包先走 github.com，失败就依次通过公共下载代理（默认 ghfast.top、gh-proxy.com、ghproxy.net、gh.llkk.cc）；每个来源单独超时。
+- SHA-256 只采信 GitHub 或 jsDelivr 的 latest.json；从代理下到的文件哈希不符（包括错误网页）会被丢弃并换下一个来源。update.log 记录实际使用的来源。
+- settings.json 新增可选 `"updateMirrors": [...]`，可替换默认代理列表（`[]` = 只用 github.com）。
+- GitHub 限流时不再整次跳过，直接改用备用源。
 
-**v0.2.0 及更早版本需要手动下载一次 v0.3.0**（解压覆盖旧文件即可，设置会保留），之后的版本会自动更新。
+注意：公共代理由第三方维护，可能失效；jsDelivr 有缓存，新版本可能晚几个小时出现在备用源。**v0.3.0 需要能连上 GitHub 一次才能升到 v0.3.1**，之后才有备用源；更早版本请手动下载。
 
-New in v0.3: auto update. Coverline checks GitHub Releases (prereleases included) 30 s after launch and every 6 hours, downloads and verifies the new build against SHA256SUMS.txt, and installs it when idle (nothing playing, pointer not on the widget), keeping Coverline.old.exe and rolling back if the swap fails. Tray menu gains the version, Check for updates and an Auto update switch (on by default). Read-only install folders get a notification and the Releases page instead of an admin prompt. **v0.2.0 and earlier: download v0.3.0 manually once; it updates itself from then on.**
+New in v0.3.1: auto update works when GitHub is unreachable. If the GitHub API fails (8 s timeout) Coverline reads `latest.json` from the repo's `update-feed` branch via jsDelivr; the zip is downloaded from github.com first and then through public proxies (ghfast.top, gh-proxy.com, ghproxy.net, gh.llkk.cc), each with its own timeout. The SHA-256 only ever comes from GitHub or the jsDelivr feed, and any copy that doesn't match is discarded. Optional `updateMirrors` in settings.json overrides the proxy list. Public proxies may disappear and jsDelivr may lag a release by a few hours. v0.3.0 needs to reach GitHub once to get 0.3.1.
 
 需要 Windows 10 1809 或更高版本。程序未签名，首次运行可能出现 SmartScreen 提示。灵感来自 Mac 应用 Sleeve（Replay Software），本项目为独立实现，与其无关联。

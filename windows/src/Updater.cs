@@ -14,11 +14,15 @@ using System.Threading;
 
 namespace Coverline
 {
-    // Self-update from GitHub Releases.
+    // Self-update from GitHub Releases, with fallbacks for networks that can't reach GitHub.
     //
     //  check (30 s after start, then every 6 h) -> newest release by semantic version (prereleases
-    //  included, drafts skipped) -> download zip + SHA256SUMS.txt to %LocalAppData%\Coverline\updates
-    //  -> verify hash -> extract to a staging folder -> when idle (nothing playing, pointer not on the
+    //  included, drafts skipped) from the GitHub API (8 s timeout); if that fails, latest.json from the
+    //  repo's update-feed branch through jsDelivr (three CDN hosts). Only these two sources are trusted
+    //  for the SHA-256 (API asset digest / SHA256SUMS.txt, or latest.json's sha256).
+    //  -> download the zip to %LocalAppData%\Coverline\updates from github.com, then through public
+    //  proxy prefixes (settings.json "updateMirrors" overrides the defaults); any copy whose hash does
+    //  not match is thrown away and the next source is tried -> verify hash -> extract to a staging folder -> when idle (nothing playing, pointer not on the
     //  widget) write a small PowerShell script that waits for this process to exit, backs the old exe
     //  up as Coverline.old.exe, copies the new files over, rolls back on failure and starts the exe.
     //
@@ -30,6 +34,29 @@ namespace Coverline
     {
         [DataMember(Name = "name")] public string Name;
         [DataMember(Name = "browser_download_url")] public string Url;
+        [DataMember(Name = "size")] public long Size;
+        [DataMember(Name = "digest")] public string Digest; // "sha256:<hex>" on newer GitHub API responses
+    }
+
+    // latest.json on the update-feed branch, written by CI after each tagged build.
+    [DataContract]
+    internal sealed class UpdateFeed
+    {
+        [DataMember(Name = "version")] public string Version;
+        [DataMember(Name = "tag")] public string Tag;
+        [DataMember(Name = "zip")] public string Zip;
+        [DataMember(Name = "sha256")] public string Sha256;
+        [DataMember(Name = "size")] public long Size;
+        [DataMember(Name = "published_at")] public string PublishedAt;
+        [DataMember(Name = "html_url")] public string HtmlUrl;
+        [DataMember(Name = "assets")] public List<FeedAsset> Assets;
+    }
+
+    [DataContract]
+    internal sealed class FeedAsset
+    {
+        [DataMember(Name = "name")] public string Name;
+        [DataMember(Name = "url")] public string Url;
         [DataMember(Name = "size")] public long Size;
     }
 
@@ -54,6 +81,11 @@ namespace Coverline
         public string ZipName { get { return AppInfo.Name + "-Windows-" + Tag + ".zip"; } }
         public ReleaseAsset Zip { get { return Asset(ZipName); } }
         public ReleaseAsset Sums { get { return Asset("SHA256SUMS.txt"); } }
+
+        // Not serialized: hash for the zip taken from a trusted source (API digest or latest.json),
+        // and where this release was found.
+        [IgnoreDataMember] public string TrustedSha256;
+        [IgnoreDataMember] public string Source;
     }
 #pragma warning restore 0649
 
@@ -68,7 +100,36 @@ namespace Coverline
     {
         public const string ReleasesApi = "https://api.github.com/repos/jiuyang5354/Coverline/releases?per_page=10";
         public const string ReleasesPage = "https://github.com/jiuyang5354/Coverline/releases";
+        public const string DownloadPrefix = "https://github.com/jiuyang5354/Coverline/releases/download/";
         private const long MaxZipBytes = 64L * 1024 * 1024;
+
+        public const int ApiTimeoutMs = 8000;
+        public const int FeedTimeoutMs = 10000;
+        public const int SumsTimeoutMs = 15000;
+        public const int DownloadTimeoutMs = 20000;                 // connect / per-read stall
+        public static TimeSpan DownloadDeadline = TimeSpan.FromMinutes(3); // whole file, per source
+
+        // latest.json mirrors of the update-feed branch, tried in order when the GitHub API fails.
+        public static readonly string[] FeedUrls =
+        {
+            "https://cdn.jsdelivr.net/gh/jiuyang5354/Coverline@update-feed/latest.json",
+            "https://fastly.jsdelivr.net/gh/jiuyang5354/Coverline@update-feed/latest.json",
+            "https://testingcf.jsdelivr.net/gh/jiuyang5354/Coverline@update-feed/latest.json"
+        };
+
+        // Public GitHub download proxies: prefix + full github.com URL. Checked working 2026-10-27;
+        // they come and go, which is why every copy is hash-checked and settings.json can override them.
+        public static readonly string[] DefaultMirrors =
+        {
+            "https://ghfast.top/",
+            "https://gh-proxy.com/",
+            "https://ghproxy.net/",
+            "https://gh.llkk.cc/"
+        };
+
+        // Network seams (replaced in tests).
+        public static Func<string, string, int, string> HttpGetString = RealGetString;
+        public static Action<string, string, int> HttpDownload = RealDownload;
 
         // ---- semantic versions ----
 
@@ -231,7 +292,12 @@ namespace Coverline
 
         public static string GetString(string url, string accept)
         {
-            var req = Request(url, 20000, accept);
+            return HttpGetString(url, accept, 20000);
+        }
+
+        private static string RealGetString(string url, string accept, int timeoutMs)
+        {
+            var req = Request(url, timeoutMs, accept);
             if (url.StartsWith("https://api.github.com/", StringComparison.OrdinalIgnoreCase))
                 req.Headers["X-GitHub-Api-Version"] = "2022-11-28";
             using (var resp = Send(req))
@@ -239,23 +305,33 @@ namespace Coverline
                 return reader.ReadToEnd();
         }
 
-        public static void Download(string url, string path)
+        private static void RealDownload(string url, string path, int timeoutMs)
         {
             string part = path + ".part";
-            var req = Request(url, 30000, "application/octet-stream");
-            using (var resp = Send(req))
-            using (var input = resp.GetResponseStream())
-            using (var output = File.Create(part))
+            var watch = Stopwatch.StartNew();
+            var req = Request(url, timeoutMs, "application/octet-stream");
+            try
             {
-                var buffer = new byte[81920];
-                long total = 0;
-                int n;
-                while ((n = input.Read(buffer, 0, buffer.Length)) > 0)
+                using (var resp = Send(req))
+                using (var input = resp.GetResponseStream())
+                using (var output = File.Create(part))
                 {
-                    total += n;
-                    if (total > MaxZipBytes) throw new IOException("download too large");
-                    output.Write(buffer, 0, n);
+                    var buffer = new byte[81920];
+                    long total = 0;
+                    int n;
+                    while ((n = input.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        total += n;
+                        if (total > MaxZipBytes) throw new IOException("download too large");
+                        if (watch.Elapsed > DownloadDeadline) throw new TimeoutException("download took longer than " + (int)DownloadDeadline.TotalSeconds + " s");
+                        output.Write(buffer, 0, n);
+                    }
                 }
+            }
+            catch
+            {
+                TryDelete(part);
+                throw;
             }
             if (File.Exists(path)) File.Delete(path);
             File.Move(part, path);
@@ -263,29 +339,187 @@ namespace Coverline
 
         public static List<ReleaseInfo> FetchReleases()
         {
-            return ParseReleases(GetString(ReleasesApi, "application/vnd.github+json"));
+            return ParseReleases(HttpGetString(ReleasesApi, "application/vnd.github+json", ApiTimeoutMs));
+        }
+
+        // ---- fallback feed ----
+
+        private static bool IsSha256(string s) { return s != null && s.Length == 64 && IsHex(s); }
+
+        // "sha256:<hex>" -> "<hex>" lower-case, else null.
+        public static string DigestHash(string digest)
+        {
+            if (digest == null || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)) return null;
+            string h = digest.Substring(7).Trim();
+            return IsSha256(h) ? h.ToLowerInvariant() : null;
+        }
+
+        // Turns latest.json into a ReleaseInfo whose zip hash is trusted. Rejects anything that does
+        // not look exactly like one of our releases (download URLs must be this repo's github.com ones,
+        // since mirrors are built by prefixing them).
+        public static ReleaseInfo ParseFeed(string json, out string error)
+        {
+            error = null;
+            UpdateFeed feed;
+            try
+            {
+                using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(json ?? "")))
+                    feed = new DataContractJsonSerializer(typeof(UpdateFeed)).ReadObject(ms) as UpdateFeed;
+            }
+            catch (Exception ex) { error = "latest.json unreadable: " + ex.Message; return null; }
+            if (feed == null) { error = "latest.json empty"; return null; }
+            string tag = string.IsNullOrEmpty(feed.Tag) && !string.IsNullOrEmpty(feed.Version) ? "v" + feed.Version.TrimStart('v', 'V') : feed.Tag;
+            if (!IsVersion(tag)) { error = "latest.json has no valid tag"; return null; }
+            var r = new ReleaseInfo { Tag = tag, Name = AppInfo.Name + " " + tag, HtmlUrl = feed.HtmlUrl, Assets = new List<ReleaseAsset>() };
+            if (!string.Equals(feed.Zip, r.ZipName, StringComparison.OrdinalIgnoreCase)) { error = "latest.json zip name " + feed.Zip + " != " + r.ZipName; return null; }
+            if (!IsSha256(feed.Sha256)) { error = "latest.json has no valid sha256"; return null; }
+            if (feed.Assets != null)
+                foreach (var a in feed.Assets)
+                    if (a != null && !string.IsNullOrEmpty(a.Name) && a.Url != null && a.Url.StartsWith(DownloadPrefix + tag + "/", StringComparison.Ordinal))
+                        r.Assets.Add(new ReleaseAsset { Name = a.Name, Url = a.Url, Size = a.Size });
+            if (r.Zip == null)
+                r.Assets.Add(new ReleaseAsset { Name = r.ZipName, Url = DownloadPrefix + tag + "/" + r.ZipName, Size = feed.Size });
+            r.TrustedSha256 = feed.Sha256.ToLowerInvariant();
+            return r;
+        }
+
+        // First readable latest.json from the jsDelivr hosts, or null.
+        public static ReleaseInfo FetchFeed(Action<string> log)
+        {
+            foreach (string url in FeedUrls)
+            {
+                try
+                {
+                    string error;
+                    var r = ParseFeed(HttpGetString(url, "application/json", FeedTimeoutMs), out error);
+                    if (r != null) { r.Source = url; return r; }
+                    log("feed " + url + ": " + error);
+                }
+                catch (Exception ex) { log("feed " + url + ": " + ex.GetType().Name + ": " + ex.Message); }
+            }
+            return null;
+        }
+
+        // GitHub API first (unless rate-limited), then the jsDelivr feed. Returns the newest release
+        // either source knows about, or null when nothing could be read (lastError says why).
+        public static ReleaseInfo FindLatest(bool tryApi, Action<string> log, out DateTime rateLimitedUntil, out string lastError)
+        {
+            rateLimitedUntil = DateTime.MinValue;
+            lastError = null;
+            if (tryApi)
+            {
+                try
+                {
+                    var latest = PickLatest(FetchReleases());
+                    if (latest != null)
+                    {
+                        latest.Source = "GitHub API";
+                        latest.TrustedSha256 = latest.Zip != null ? DigestHash(latest.Zip.Digest) : null;
+                    }
+                    return latest ?? new ReleaseInfo { Tag = null, Source = "GitHub API" };
+                }
+                catch (RateLimitedException ex) { rateLimitedUntil = ex.UntilUtc; lastError = "GitHub API " + ex.Message; }
+                catch (Exception ex) { lastError = "GitHub API " + ex.GetType().Name + ": " + ex.Message; }
+                log("check: " + lastError + "; trying jsDelivr");
+            }
+            var fromFeed = FetchFeed(log);
+            if (fromFeed == null) lastError = (lastError == null ? "" : lastError + "; ") + "jsDelivr feed unavailable";
+            return fromFeed;
+        }
+
+        // Cleans the user's mirror list: null -> defaults; keeps http(s) prefixes, adds a trailing '/'.
+        public static List<string> NormalizeMirrors(IList<string> configured)
+        {
+            var list = new List<string>();
+            IList<string> src = configured ?? (IList<string>)DefaultMirrors;
+            foreach (string raw in src)
+            {
+                if (raw == null) continue;
+                string m = raw.Trim();
+                if (!(m.StartsWith("https://", StringComparison.OrdinalIgnoreCase) || m.StartsWith("http://", StringComparison.OrdinalIgnoreCase))) continue;
+                if (!m.EndsWith("/")) m += "/";
+                if (!list.Contains(m)) list.Add(m);
+            }
+            return list;
+        }
+
+        // github.com first, then each mirror prefix + the full github.com URL.
+        public static List<string> DownloadSources(string githubUrl, IList<string> mirrors)
+        {
+            var list = new List<string> { githubUrl };
+            foreach (string m in NormalizeMirrors(mirrors)) list.Add(m + githubUrl);
+            return list;
+        }
+
+        // The zip's expected hash: trusted value carried by the release, else SHA256SUMS.txt from
+        // github.com, else latest.json for the same tag. Never from a proxy.
+        public static string ResolveHash(ReleaseInfo release, Action<string> log)
+        {
+            if (IsSha256(release.TrustedSha256)) return release.TrustedSha256;
+            ReleaseAsset zip = release.Zip, sums = release.Sums;
+            if (sums != null && zip != null)
+            {
+                try
+                {
+                    string h = FindHash(HttpGetString(sums.Url, "text/plain, application/octet-stream", SumsTimeoutMs), zip.Name);
+                    if (h != null) return h;
+                    log("SHA256SUMS.txt has no line for " + zip.Name);
+                }
+                catch (Exception ex) { log("SHA256SUMS.txt: " + ex.GetType().Name + ": " + ex.Message); }
+            }
+            var feed = FetchFeed(log);
+            if (feed != null && string.Equals(feed.Tag, release.Tag, StringComparison.OrdinalIgnoreCase)) return feed.TrustedSha256;
+            return null;
+        }
+
+        public static string Host(string url)
+        {
+            try { return new Uri(url).Host; } catch { return url; }
         }
 
         // Downloads, verifies and extracts a release into updatesDir. Returns the staging folder that
         // holds Coverline.exe, or null (with a reason) when anything does not check out.
         public static string Stage(ReleaseInfo release, string updatesDir, out string error)
         {
+            string used;
+            return Stage(release, updatesDir, null, delegate { }, out error, out used);
+        }
+
+        // mirrors: null = DefaultMirrors. usedSource: the URL the verified zip came from ("cache" if
+        // a verified copy was already on disk).
+        public static string Stage(ReleaseInfo release, string updatesDir, IList<string> mirrors, Action<string> log, out string error, out string usedSource)
+        {
             error = null;
-            ReleaseAsset zip = release.Zip, sumsAsset = release.Sums;
-            if (zip == null || sumsAsset == null) { error = "release has no zip or SHA256SUMS.txt"; return null; }
+            usedSource = null;
+            ReleaseAsset zip = release.Zip;
+            if (zip == null || string.IsNullOrEmpty(zip.Url)) { error = "release has no zip"; return null; }
             Directory.CreateDirectory(updatesDir);
 
-            string expected = FindHash(GetString(sumsAsset.Url, "text/plain, application/octet-stream"), zip.Name);
-            if (expected == null) { error = "no hash for " + zip.Name + " in SHA256SUMS.txt"; return null; }
+            string expected = ResolveHash(release, log);
+            if (expected == null) { error = "no trusted SHA-256 for " + zip.Name; return null; }
 
             string zipPath = Path.Combine(updatesDir, zip.Name);
-            if (!File.Exists(zipPath) || Sha256File(zipPath) != expected) Download(zip.Url, zipPath);
-            string actual = Sha256File(zipPath);
-            if (actual != expected)
+            if (File.Exists(zipPath) && Sha256File(zipPath) == expected) usedSource = "cache";
+            else
             {
                 TryDelete(zipPath);
-                error = "hash mismatch (expected " + expected.Substring(0, 12) + "…, got " + actual.Substring(0, 12) + "…)";
-                return null;
+                var sources = DownloadSources(zip.Url, mirrors);
+                foreach (string url in sources)
+                {
+                    try { HttpDownload(url, zipPath, DownloadTimeoutMs); }
+                    catch (Exception ex)
+                    {
+                        TryDelete(zipPath);
+                        log("download via " + Host(url) + " failed: " + ex.GetType().Name + ": " + ex.Message);
+                        continue;
+                    }
+                    string actual = File.Exists(zipPath) ? Sha256File(zipPath) : "";
+                    if (actual == expected) { usedSource = url; break; }
+                    long len = File.Exists(zipPath) ? new FileInfo(zipPath).Length : 0;
+                    TryDelete(zipPath);
+                    log("download via " + Host(url) + " discarded: sha256 mismatch (" + len + " bytes, got " + (actual.Length >= 12 ? actual.Substring(0, 12) : "none") + "…, want " + expected.Substring(0, 12) + "…)");
+                }
+                if (usedSource == null) { error = "no source delivered a zip matching sha256 " + expected.Substring(0, 12) + "… (" + sources.Count + " tried)"; return null; }
             }
 
             string staging = Path.Combine(updatesDir, "staging-" + release.Tag);
@@ -441,6 +675,7 @@ try { Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction 
 
         public Func<bool> IsIdle = delegate { return true; };
         public Func<bool> AutoEnabled = delegate { return true; };
+        public Func<IList<string>> Mirrors = delegate { return null; }; // settings.json updateMirrors; null = defaults
         public event Action<string, Action> Notify;   // text, optional click action
         public event Action StateChanged;
         public event Action ExitRequested;
@@ -498,23 +733,28 @@ try { Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction 
                 return;
             }
             if (manual) Raise("正在检查更新… Checking for updates…", null);
-            ThreadPool.QueueUserWorkItem(delegate { Work(manual); });
+            IList<string> mirrors = null;
+            try { var m = Mirrors(); if (m != null) mirrors = new List<string>(m); } catch { }
+            ThreadPool.QueueUserWorkItem(delegate { Work(manual, mirrors); });
         }
 
-        private void Work(bool manual)
+        private void Work(bool manual, IList<string> mirrors)
         {
             try
             {
-                if (DateTime.UtcNow < rateLimitedUntil)
+                DateTime limited;
+                string findError;
+                var latest = UpdateCore.FindLatest(DateTime.UtcNow >= rateLimitedUntil, UpdateLog.Write, out limited, out findError);
+                if (limited > rateLimitedUntil) rateLimitedUntil = limited;
+                if (latest == null)
                 {
-                    if (manual) Report("GitHub 暂时限制了访问，请稍后再试。GitHub rate limit — try again later.", null);
+                    UpdateLog.Write("check failed: " + findError);
+                    if (manual) Report("检查更新失败：GitHub 和备用源都连不上。Couldn't reach GitHub or the backup feed.", null);
                     return;
                 }
-                var releases = UpdateCore.FetchReleases();
-                var latest = UpdateCore.PickLatest(releases);
-                if (latest == null || UpdateCore.CompareVersions(latest.Tag, AppInfo.Version) <= 0)
+                if (latest.Tag == null || UpdateCore.CompareVersions(latest.Tag, AppInfo.Version) <= 0)
                 {
-                    UpdateLog.Write("check: up to date (" + AppInfo.Version + ")");
+                    UpdateLog.Write("check: up to date (" + AppInfo.Version + ", via " + latest.Source + ")");
                     if (manual) Report("已是最新版本 v" + AppInfo.Version + "  You're up to date.", null);
                     return;
                 }
@@ -523,7 +763,7 @@ try { Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction 
                     if (manual) Report(latest.Tag + " 已下载，点此立即重启更新。Click to restart and update.", ApplyNow);
                     return;
                 }
-                UpdateLog.Write("check: " + latest.Tag + " available (running " + AppInfo.Version + ")");
+                UpdateLog.Write("check: " + latest.Tag + " available via " + latest.Source + " (running " + AppInfo.Version + ")");
 
                 string installDir = Path.GetDirectoryName(ExePath);
                 if (!UpdateCore.CanWrite(installDir))
@@ -541,15 +781,15 @@ try { Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction 
                 }
 
                 if (manual) Report("发现 " + latest.Tag + "，正在后台下载… Downloading " + latest.Tag + "…", null);
-                string error;
-                string staging = UpdateCore.Stage(latest, UpdatesDir, out error);
+                string error, used;
+                string staging = UpdateCore.Stage(latest, UpdatesDir, mirrors, UpdateLog.Write, out error, out used);
                 if (staging == null)
                 {
                     UpdateLog.Write("stage " + latest.Tag + " abandoned: " + error);
                     if (manual) Report("更新包校验失败，已放弃。Update check failed: " + error, null);
                     return;
                 }
-                UpdateLog.Write("staged " + latest.Tag + " (sha256 ok)");
+                UpdateLog.Write("staged " + latest.Tag + " (sha256 ok, zip from " + used + ")");
                 post(delegate
                 {
                     stagedRelease = latest;
@@ -558,12 +798,6 @@ try { Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction 
                     if (manual || !AutoEnabled()) Raise(latest.Tag + " 已就绪，点此立即重启更新。Ready — click to restart and update.", ApplyNow);
                     InstallIfIdle();
                 });
-            }
-            catch (RateLimitedException ex)
-            {
-                rateLimitedUntil = ex.UntilUtc;
-                UpdateLog.Write("check: " + ex.Message);
-                if (manual) Report("GitHub 暂时限制了访问，请稍后再试。GitHub rate limit — try again later.", null);
             }
             catch (Exception ex)
             {
