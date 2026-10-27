@@ -5,8 +5,8 @@ namespace Coverline
     internal static class AppInfo
     {
         public const string Name = "Coverline";
-        public const string Version = "0.1.0";
-        public const string AssemblyVersion = "0.1.0.0";
+        public const string Version = "0.2.0";
+        public const string AssemblyVersion = "0.2.0.0";
         public const string Tagline = "Now-playing desktop widget for Windows";
         public const string Copyright = "Copyright (c) 2026 jiuyang5354";
         public const string Repo = "github.com/jiuyang5354/Coverline";

@@ -83,17 +83,26 @@ namespace Coverline
         }
     }
 
-    // A small vector button (previous / play-pause / next).
+    // A small vector button (previous / play-pause / next). With a halo brush it becomes the
+    // Liquid Glass variant: a soft light disc fades in on hover and the button presses in and
+    // springs back.
     internal sealed class IconButton : Border
     {
         private readonly Path glyph;
         private readonly Brush normal;
         private readonly Brush hover;
+        private readonly Ellipse halo;
+        private readonly ScaleTransform press;
         private bool enabled = true;
 
         public event Action Click;
 
         public IconButton(Geometry geometry, double size, Brush normal, Brush hover)
+            : this(geometry, size, normal, hover, null)
+        {
+        }
+
+        public IconButton(Geometry geometry, double size, Brush normal, Brush hover, Brush haloBrush)
         {
             this.normal = normal;
             this.hover = hover;
@@ -106,22 +115,68 @@ namespace Coverline
                 Data = geometry,
                 Fill = normal,
                 Stretch = Stretch.Uniform,
-                Width = size * 0.5,
-                Height = size * 0.5,
+                Width = size * (haloBrush != null ? 0.40 : 0.5),
+                Height = size * (haloBrush != null ? 0.40 : 0.5),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 SnapsToDevicePixels = true
             };
-            Child = glyph;
-            MouseEnter += delegate { if (enabled) glyph.Fill = hover; };
-            MouseLeave += delegate { glyph.Fill = normal; };
-            MouseLeftButtonDown += (s, e) => { e.Handled = true; };
+            if (haloBrush != null)
+            {
+                halo = new Ellipse { Fill = haloBrush, Opacity = 0, IsHitTestVisible = false };
+                var g = new Grid();
+                g.Children.Add(halo);
+                g.Children.Add(glyph);
+                Child = g;
+                press = new ScaleTransform(1, 1);
+                RenderTransformOrigin = new Point(0.5, 0.5);
+                RenderTransform = press;
+            }
+            else
+            {
+                Child = glyph;
+            }
+            MouseEnter += delegate
+            {
+                if (!enabled) return;
+                if (halo != null) Fade(halo, 1, 140); else glyph.Fill = hover;
+            };
+            MouseLeave += delegate
+            {
+                if (halo != null) { Fade(halo, 0, 240); Spring(); }
+                else glyph.Fill = normal;
+            };
+            MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                if (enabled && press != null) Scale(0.86, 90, new QuadraticEase { EasingMode = EasingMode.EaseOut });
+            };
             MouseLeftButtonUp += (s, e) =>
             {
                 e.Handled = true;
+                if (press != null) Spring();
                 var handler = Click;
                 if (enabled && handler != null) handler();
             };
+        }
+
+        private static void Fade(UIElement element, double to, int ms)
+        {
+            element.BeginAnimation(OpacityProperty, new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        }
+
+        // Restrained spring: one small overshoot, settles in ~0.4 s.
+        private void Spring()
+        {
+            if (press == null) return;
+            Scale(1.0, 420, new ElasticEase { EasingMode = EasingMode.EaseOut, Oscillations = 1, Springiness = 6 });
+        }
+
+        private void Scale(double to, int ms, IEasingFunction ease)
+        {
+            var a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms)) { EasingFunction = ease };
+            press.BeginAnimation(ScaleTransform.ScaleXProperty, a);
+            press.BeginAnimation(ScaleTransform.ScaleYProperty, a);
         }
 
         public Geometry Glyph
@@ -161,6 +216,7 @@ namespace Coverline
     internal sealed class WidgetWindow : Window
     {
         private const double ShadowRoom = 30; // transparent margin so shadows are not clipped
+        private const double EdgeGap = 24;    // distance from the work-area edge for the default spot
 
         private readonly Settings settings;
         private readonly MediaWatcher media;
@@ -171,6 +227,14 @@ namespace Coverline
         private bool hovering;
         private bool placed;
         private NowPlaying shown = NowPlaying.Empty;
+        private readonly bool glassWindow;     // Liquid Glass: non-layered window over a DWM backdrop
+        private readonly Action<NowPlaying> mediaHandler;
+        private BackdropResult backdropResult = BackdropResult.Solid;
+        private double cardRadius;
+        private bool textFading;               // a text fade-out is running; it fills in `shown` when done
+        private FrameworkElement rootElement;
+        private SolidColorBrush coverTint;
+        private string coverKey;
 
         // Parts of the current visual tree (rebuilt whenever theme, size or layout changes).
         private CrossfadeImage art;
@@ -194,7 +258,11 @@ namespace Coverline
             this.media = media;
             Title = AppInfo.Name;
             WindowStyle = WindowStyle.None;
-            AllowsTransparency = true;
+            // Liquid Glass needs a non-layered window, otherwise DWM draws no backdrop behind it
+            // (see the comment above Native.ExtendFrame). AllowsTransparency cannot change once the
+            // window exists, so switching to or from Liquid Glass recreates the window.
+            glassWindow = WantsGlassWindow(settings);
+            AllowsTransparency = !glassWindow;
             Background = Brushes.Transparent;
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
@@ -203,7 +271,7 @@ namespace Coverline
             WindowStartupLocation = WindowStartupLocation.Manual;
             UseLayoutRounding = true;
             Topmost = settings.Topmost;
-            Opacity = 0;
+            if (!glassWindow) Opacity = 0; // Window.Opacity only works on layered windows; glass fades its content instead
             Left = -32000;
             Top = -32000;
             TextOptions.SetTextFormattingMode(this, TextFormattingMode.Ideal);
@@ -215,9 +283,20 @@ namespace Coverline
             {
                 handle = new WindowInteropHelper(this).Handle;
                 Native.MakeToolWindow(handle);
-                HwndSource.FromHwnd(handle).AddHook(WndProc);
+                var source = HwndSource.FromHwnd(handle);
+                source.AddHook(WndProc);
+                if (glassWindow)
+                {
+                    // Clear WPF's render target to transparent and let DWM paint the whole client
+                    // area; then pick the backdrop and rebuild with the matching tint.
+                    source.CompositionTarget.BackgroundColor = Colors.Transparent;
+                    Native.ExtendFrame(handle);
+                    Rebuild();
+                }
             };
             Loaded += delegate { Place(); };
+            SizeChanged += delegate { UpdateRegion(); };
+            DpiChanged += delegate { UpdateRegion(); };
             LocationChanged += delegate { if (placed) { saveTimer.Stop(); saveTimer.Start(); } };
             MouseRightButtonUp += (s, e) =>
             {
@@ -226,8 +305,62 @@ namespace Coverline
                 e.Handled = true;
             };
 
-            media.Changed += np => Display(np, true);
+            mediaHandler = np => Display(np, true);
+            media.Changed += mediaHandler;
+            Closed += delegate { media.Changed -= mediaHandler; };
             Rebuild();
+        }
+
+        public static bool WantsGlassWindow(Settings s)
+        {
+            return s.ThemeValue == ThemeKind.LiquidGlass;
+        }
+
+        public bool UsesGlassWindow
+        {
+            get { return glassWindow; }
+        }
+
+        // Transparent margin between the window edge and the visible card.
+        public double CardInset
+        {
+            get { return glassWindow ? 0 : ShadowRoom; }
+        }
+
+        // ---------- glass backdrop ----------
+
+        private BackdropResult ApplyBackdrop()
+        {
+            GlassBackdrop wanted = settings.BackdropValue;
+            bool dark = !SystemLook.AppsUseLightTheme;
+            Native.ClearBackdrop(handle);
+            if (!SystemLook.TransparencyEnabled || wanted == GlassBackdrop.Off) return BackdropResult.Solid;
+            if (wanted != GlassBackdrop.Blur && Native.TrySystemAcrylic(handle, dark))
+            {
+                // The widget never takes focus (WS_EX_NOACTIVATE), and DWM shows the flat
+                // "inactive" fallback for inactive windows; WndProc keeps the frame painted active.
+                Native.SendMessage(handle, Native.WM_NCACTIVATE, new IntPtr(1), IntPtr.Zero);
+                return BackdropResult.SystemAcrylic;
+            }
+            if (wanted != GlassBackdrop.Blur && Native.WindowsBuild >= 17134 &&
+                Native.SetAccent(handle, Native.ACCENT_ENABLE_ACRYLICBLURBEHIND, dark ? 0xB0202024u : 0xB8F3F3F5u))
+                return BackdropResult.Acrylic;
+            if (Native.SetAccent(handle, Native.ACCENT_ENABLE_BLURBEHIND, 0)) return BackdropResult.Blur;
+            Native.ClearBackdrop(handle);
+            return BackdropResult.Solid;
+        }
+
+        // Rounded window region: clips the DWM backdrop to the card's large corner radius.
+        private void UpdateRegion()
+        {
+            if (!glassWindow || handle == IntPtr.Zero || cardRadius <= 0) return;
+            var source = PresentationSource.FromVisual(this);
+            if (source == null || source.CompositionTarget == null) return;
+            Matrix m = source.CompositionTarget.TransformToDevice;
+            int w = (int)Math.Round(ActualWidth * m.M11);
+            int h = (int)Math.Round(ActualHeight * m.M22);
+            int d = (int)Math.Round(cardRadius * 2 * m.M11);
+            if (w > 0 && h > 0) Native.SetRoundRegion(handle, w, h, d);
         }
 
         // ---------- placement & z-order ----------
@@ -238,7 +371,7 @@ namespace Coverline
             double w = ActualWidth, h = ActualHeight;
             double vl = SystemParameters.VirtualScreenLeft, vt = SystemParameters.VirtualScreenTop;
             double vw = SystemParameters.VirtualScreenWidth, vh = SystemParameters.VirtualScreenHeight;
-            if (settings.HasPosition &&
+            if (settings.HasPosition && settings.UserMoved &&
                 settings.Left + w > vl + 40 && settings.Left < vl + vw - 40 &&
                 settings.Top + h > vt + 40 && settings.Top < vt + vh - 40)
             {
@@ -251,17 +384,32 @@ namespace Coverline
             }
             placed = true;
             if (!Topmost && handle != IntPtr.Zero) Native.SendToBottom(handle);
-            BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320)));
+            UpdateRegion();
+            var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320));
+            if (glassWindow) { if (rootElement != null) rootElement.BeginAnimation(OpacityProperty, fade); }
+            else BeginAnimation(OpacityProperty, fade);
         }
 
+        // Default spot: bottom centre of the primary work area, just above the taskbar. Desktop
+        // icons fill columns down the left and right edges, so both top corners (v0.1's spot) and
+        // the bottom-right corner tend to cover them; the bottom middle is usually empty desktop.
         public void ResetPosition()
         {
             Rect work = SystemParameters.WorkArea;
             UpdateLayout();
-            // Top-right corner of the primary screen; the shadow margin doubles as breathing room.
-            Left = work.Right - ActualWidth - 8;
-            Top = work.Top + 8;
+            double inset = CardInset;
+            Left = Math.Round(work.Left + (work.Width - ActualWidth) / 2);
+            Top = Math.Round(work.Bottom - ActualHeight + inset - EdgeGap);
+            settings.UserMoved = false;
             SavePosition();
+        }
+
+        // Moves the window so its visible card lands on the given screen point (theme switches).
+        public void PlaceCardAt(double cardLeft, double cardTop)
+        {
+            settings.HasPosition = true;
+            settings.Left = cardLeft - CardInset;
+            settings.Top = cardTop - CardInset;
         }
 
         private void SavePosition()
@@ -283,6 +431,13 @@ namespace Coverline
         // widget sits on the desktop beneath your windows instead of floating over them.
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
+            if (msg == Native.WM_NCACTIVATE && glassWindow && backdropResult == BackdropResult.SystemAcrylic && wParam == IntPtr.Zero)
+            {
+                // Paint the frame as active even when another window has focus, so the system
+                // acrylic stays live instead of dropping to its flat inactive colour.
+                handled = true;
+                return Native.DefWindowProc(hwnd, msg, new IntPtr(1), lParam);
+            }
             if (msg == Native.WM_WINDOWPOSCHANGING && !settings.Topmost && lParam != IntPtr.Zero)
             {
                 var pos = (Native.WINDOWPOS)Marshal.PtrToStructure(lParam, typeof(Native.WINDOWPOS));
@@ -299,7 +454,13 @@ namespace Coverline
 
         public void Rebuild()
         {
-            theme = Theme.Get(settings.ThemeValue);
+            if (glassWindow)
+                backdropResult = handle != IntPtr.Zero ? ApplyBackdrop() : SystemLook.Predict(settings.BackdropValue);
+            theme = Theme.Get(settings.ThemeValue, backdropResult);
+            coverTint = null;
+            coverKey = null;
+            cardRadius = 0;
+            textFading = false;
             scale = Theme.Scale(settings.SizeValue);
             WidgetLayout layout = theme.ForceArtOnly ? WidgetLayout.ArtOnly : settings.LayoutValue;
             bool withArt = layout != WidgetLayout.TextOnly;
@@ -324,7 +485,11 @@ namespace Coverline
             }
 
             FrameworkElement body;
-            if (theme.HasCard)
+            if (theme.Liquid)
+            {
+                body = BuildGlassCard(row);
+            }
+            else if (theme.HasCard)
             {
                 body = BuildCard(row);
             }
@@ -336,8 +501,10 @@ namespace Coverline
             body.MouseLeave += delegate { SetHover(false); };
             body.MouseLeftButtonDown += OnBodyMouseDown;
 
-            var root = new Grid { Margin = new Thickness(ShadowRoom) };
+            var root = new Grid { Margin = new Thickness(CardInset) };
             root.Children.Add(body);
+            if (glassWindow && !placed) root.Opacity = 0; // faded in by Place()
+            rootElement = root;
             Content = root;
 
             hovering = body.IsMouseOver;
@@ -345,6 +512,79 @@ namespace Coverline
             var current = shown;
             shown = NowPlaying.Empty;
             Display(current, false);
+            UpdateRegion();
+        }
+
+        // Liquid Glass card, back to front: tint, album colour, light falloff, specular arc,
+        // content, then the bevel rims on top. No outer shadow: the window region that rounds the
+        // DWM backdrop also clips anything drawn outside the card.
+        private FrameworkElement BuildGlassCard(FrameworkElement content)
+        {
+            double r = Math.Round(theme.CardCorner * Math.Max(1.0, scale * 0.9));
+            cardRadius = r;
+            var corner = new CornerRadius(r);
+            var surface = new Grid();
+
+            surface.Children.Add(new Border { Background = theme.GlassTint, CornerRadius = corner });
+            coverTint = new SolidColorBrush(Colors.Transparent);
+            surface.Children.Add(new Border { Background = coverTint, Opacity = theme.CoverTintOpacity, CornerRadius = corner, IsHitTestVisible = false });
+            surface.Children.Add(new Border { Background = theme.Sheen, CornerRadius = corner, IsHitTestVisible = false });
+            surface.Children.Add(new Border { Background = theme.Specular, CornerRadius = corner, IsHitTestVisible = false });
+
+            // Thin bright stroke riding the top-left bevel, fading out along both edges.
+            double i = 1.5, reach = r * 2.6;
+            var fig = new PathFigure { StartPoint = new Point(i, r + r * 1.4) };
+            fig.Segments.Add(new LineSegment(new Point(i, r), true));
+            fig.Segments.Add(new ArcSegment(new Point(r, i), new Size(r - i, r - i), 0, false, SweepDirection.Clockwise, true));
+            fig.Segments.Add(new LineSegment(new Point(r + reach, i), true));
+            var geo = new PathGeometry();
+            geo.Figures.Add(fig);
+            var lineBrush = new LinearGradientBrush { MappingMode = BrushMappingMode.Absolute, StartPoint = new Point(0, r * 2.4), EndPoint = new Point(r + reach, 0) };
+            Color c = theme.SpecularLine;
+            lineBrush.GradientStops.Add(new GradientStop(Color.FromArgb(0, c.R, c.G, c.B), 0));
+            lineBrush.GradientStops.Add(new GradientStop(Color.FromArgb(255, c.R, c.G, c.B), 0.42));
+            lineBrush.GradientStops.Add(new GradientStop(Color.FromArgb(0, c.R, c.G, c.B), 1));
+            surface.Children.Add(new Path
+            {
+                Data = geo,
+                Stroke = lineBrush,
+                StrokeThickness = 1.2,
+                Opacity = theme.SpecularLineOpacity,
+                IsHitTestVisible = false,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                Effect = new BlurEffect { Radius = 1.5 }
+            });
+
+            surface.Children.Add(new Border { Padding = new Thickness(theme.CardPadding * scale), Child = content });
+
+            surface.Children.Add(new Border { BorderBrush = theme.Rim, BorderThickness = new Thickness(1), CornerRadius = corner, IsHitTestVisible = false });
+            surface.Children.Add(new Border { BorderBrush = theme.RimInner, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(Math.Max(0, r - 1)), Margin = new Thickness(1), IsHitTestVisible = false });
+
+            surface.SizeChanged += (s, e) =>
+            {
+                surface.Clip = new RectangleGeometry(new Rect(e.NewSize), r, r);
+            };
+            return surface;
+        }
+
+        private void UpdateCoverTint(NowPlaying np, bool animate)
+        {
+            if (coverTint == null) return;
+            string key = np.Art == null ? "" : np.ArtKey;
+            if (key == coverKey) return;
+            coverKey = key;
+            Color target = CoverColor.Of(np.Art, key);
+            if (np.Art == null) target = Color.FromArgb(0, coverTint.Color.R, coverTint.Color.G, coverTint.Color.B);
+            if (animate)
+            {
+                coverTint.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(target, TimeSpan.FromMilliseconds(600)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut } });
+            }
+            else
+            {
+                coverTint.BeginAnimation(SolidColorBrush.ColorProperty, null);
+                coverTint.Color = target;
+            }
         }
 
         private FrameworkElement BuildCard(FrameworkElement content)
@@ -413,7 +653,19 @@ namespace Coverline
             grid.Children.Add(artPlaceholder);
             grid.Children.Add(art);
 
-            if (overlayControls)
+            if (overlayControls && theme.Liquid)
+            {
+                // Liquid Glass, art only: a dark glass capsule floats over the bottom of the art.
+                Brush fill, rim, halo, glyph;
+                Theme.OverArtCapsule(out fill, out rim, out halo, out glyph);
+                var capsule = BuildCapsule(glyph, fill, rim, halo, size < 90 ? 0.8 : 0.9);
+                capsule.VerticalAlignment = VerticalAlignment.Bottom;
+                capsule.HorizontalAlignment = HorizontalAlignment.Center;
+                capsule.Margin = new Thickness(0, 0, 0, Math.Round(size * 0.07));
+                controls = capsule;
+                grid.Children.Add(capsule);
+            }
+            else if (overlayControls)
             {
                 // Art-only: controls appear over the artwork on a soft scrim.
                 var scrim = new Border
@@ -430,6 +682,12 @@ namespace Coverline
                 overlay.Children.Add(buttons);
                 controls = overlay;
                 grid.Children.Add(overlay);
+            }
+
+            if (theme.ArtStroke != null)
+            {
+                // Hairline inner stroke: the sleeve reads as set into the glass.
+                grid.Children.Insert(2, new Border { CornerRadius = new CornerRadius(r), BorderBrush = theme.ArtStroke, BorderThickness = new Thickness(1), IsHitTestVisible = false });
             }
 
             return new Border
@@ -501,12 +759,65 @@ namespace Coverline
             textBlock = words;
             stack.Children.Add(words);
 
-            var buttons = BuildButtons(theme.ControlBrush, theme.ControlHover, 1.0);
-            buttons.HorizontalAlignment = HorizontalAlignment.Left;
-            buttons.Margin = new Thickness(-6 * scale, 10 * scale, 0, 0);
-            controls = buttons;
-            stack.Children.Add(buttons);
-            return stack;
+            if (theme.Liquid)
+            {
+                var capsule = BuildCapsule(theme.ControlBrush, theme.CapsuleFill, theme.CapsuleRim, theme.ButtonHalo, 0.86);
+                capsule.HorizontalAlignment = HorizontalAlignment.Left;
+                capsule.Margin = new Thickness(0, 9 * scale, 0, 0);
+                controls = capsule;
+                stack.Children.Add(capsule);
+            }
+            else
+            {
+                var buttons = BuildButtons(theme.ControlBrush, theme.ControlHover, 1.0);
+                buttons.HorizontalAlignment = HorizontalAlignment.Left;
+                buttons.Margin = new Thickness(-6 * scale, 10 * scale, 0, 0);
+                controls = buttons;
+                stack.Children.Add(buttons);
+            }
+
+            if (theme.TextScrim == null) return stack;
+
+            // A soft, edge-less halo behind the words (light glass: brighter, dark glass: darker)
+            // keeps the type legible over busy or high-contrast wallpapers.
+            Color sc = ((SolidColorBrush)theme.TextScrim).Color;
+            var halo = new RadialGradientBrush { Center = new Point(0.45, 0.5), GradientOrigin = new Point(0.45, 0.5), RadiusX = 0.62, RadiusY = 0.62 };
+            halo.GradientStops.Add(new GradientStop(sc, 0));
+            halo.GradientStops.Add(new GradientStop(sc, 0.55));
+            halo.GradientStops.Add(new GradientStop(Color.FromArgb(0, sc.R, sc.G, sc.B), 1));
+            var wrap = new Grid { VerticalAlignment = VerticalAlignment.Center };
+            wrap.Children.Add(new Border { Background = halo, Margin = new Thickness(-12 * scale, -10 * scale, -8 * scale, -10 * scale), IsHitTestVisible = false });
+            wrap.Children.Add(stack);
+            return wrap;
+        }
+
+        // Liquid Glass control capsule: three buttons on a small pill of glass.
+        private Border BuildCapsule(Brush glyph, Brush fill, Brush rim, Brush halo, double factor)
+        {
+            double b = Math.Round(28 * scale * factor);
+            previous = new IconButton(Glyphs.Previous, b, glyph, glyph, halo);
+            playPause = new IconButton(Glyphs.Play, Math.Round(b * 1.12), glyph, glyph, halo);
+            next = new IconButton(Glyphs.Next, b, glyph, glyph, halo);
+            previous.Click += media.Previous;
+            playPause.Click += media.PlayPause;
+            next.Click += media.Next;
+            previous.ToolTip = "上一首";
+            playPause.ToolTip = "播放 / 暂停";
+            next.ToolTip = "下一首";
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            row.Children.Add(previous);
+            row.Children.Add(playPause);
+            row.Children.Add(next);
+            double h = Math.Round(b * 1.12) + 4;
+            return new Border
+            {
+                Background = fill,
+                BorderBrush = rim,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(h / 2),
+                Padding = new Thickness(Math.Round(4 * scale), 1, Math.Round(4 * scale), 1),
+                Child = row
+            };
         }
 
         private StackPanel BuildButtons(Brush normal, Brush hover, double factor)
@@ -533,8 +844,14 @@ namespace Coverline
         private void OnBodyMouseDown(object sender, MouseButtonEventArgs e)
         {
             if (e.ChangedButton != MouseButton.Left || e.ButtonState != MouseButtonState.Pressed) return;
+            double l = Left, t = Top;
             try { DragMove(); }
             catch (InvalidOperationException) { }
+            if (Math.Abs(Left - l) > 0.5 || Math.Abs(Top - t) > 0.5)
+            {
+                settings.UserMoved = true; // from now on the position the user chose is kept
+                SavePosition();
+            }
         }
 
         private void SetHover(bool value)
@@ -568,22 +885,39 @@ namespace Coverline
             if (art != null) art.Set(np.Art, np.Art == null ? "" : np.ArtKey, animate);
             if (artPlaceholder != null) artPlaceholder.Visibility = np.Art == null ? Visibility.Visible : Visibility.Collapsed;
             if (backdrop != null) backdrop.Set(np.Art, np.Art == null ? "" : np.ArtKey, animate);
+            UpdateCoverTint(np, animate);
 
+            // v0.1 bug (the "blank card"): players such as QQ Music publish several snapshots in a
+            // burst (title, then artwork, then playback state). The fade-out's completion handler
+            // bailed out whenever a newer snapshot had arrived ("shown != np"), and the newer
+            // snapshot had the same text so it never started a fade-in, leaving the title, artist
+            // and label held at opacity 0 by the finished fade-out. Now one fade runs at a time,
+            // it always fades back in with whatever is newest, and the no-fade path clears any
+            // held animation.
             if (textBlock != null)
             {
                 if (textChanged && animate)
                 {
-                    var outAnim = new DoubleAnimation(0, TimeSpan.FromMilliseconds(160));
-                    outAnim.Completed += delegate
+                    if (!textFading)
                     {
-                        if (shown != np) return; // superseded by a newer track
-                        FillText(np);
-                        textBlock.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
-                    };
-                    textBlock.BeginAnimation(OpacityProperty, outAnim);
+                        textFading = true;
+                        FrameworkElement target = textBlock;
+                        var outAnim = new DoubleAnimation(0, TimeSpan.FromMilliseconds(160));
+                        outAnim.Completed += delegate
+                        {
+                            if (target != textBlock) return; // widget was rebuilt meanwhile
+                            textFading = false;
+                            FillText(shown);
+                            textBlock.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+                        };
+                        textBlock.BeginAnimation(OpacityProperty, outAnim);
+                    }
+                    // else: the running fade-out will fill in `shown` (this snapshot) when it ends.
                 }
-                else
+                else if (!textFading)
                 {
+                    textBlock.BeginAnimation(OpacityProperty, null);
+                    textBlock.Opacity = 1;
                     FillText(np);
                 }
             }

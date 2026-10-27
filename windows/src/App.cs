@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Reflection;
 using System.Threading;
 using System.Windows;
+using Microsoft.Win32;
 using Forms = System.Windows.Forms;
 
 namespace Coverline
@@ -11,17 +12,21 @@ namespace Coverline
     {
         private readonly Settings settings;
         private readonly MediaWatcher media;
-        private readonly WidgetWindow widget;
+        private WidgetWindow widget;
         private readonly Forms.NotifyIcon tray;
         private readonly Forms.ContextMenuStrip menu;
         private Forms.ToolStripMenuItem layoutMenu;
         private Forms.ToolStripMenuItem visibleItem;
+        private Forms.ToolStripMenuItem backdropMenu;
+        private readonly UserPreferenceChangedEventHandler onPreferences;
+        private bool lastLight;
+        private bool lastTransparency;
 
         public Controller()
         {
             settings = Settings.Load();
             media = new MediaWatcher(Application.Current.Dispatcher);
-            widget = new WidgetWindow(settings, media);
+            widget = CreateWidget();
 
             menu = BuildMenu();
             tray = new Forms.NotifyIcon
@@ -32,11 +37,32 @@ namespace Coverline
                 ContextMenuStrip = menu
             };
             tray.MouseClick += (s, e) => { if (e.Button == Forms.MouseButtons.Left) SetVisible(!widget.IsVisible); };
-            widget.MenuRequested += () => menu.Show(Forms.Cursor.Position);
             media.Changed += np => UpdateTrayText(np);
+
+            // Liquid Glass follows the Windows app theme (dark/light type) and the transparency switch.
+            lastLight = SystemLook.AppsUseLightTheme;
+            lastTransparency = SystemLook.TransparencyEnabled;
+            onPreferences = (s, e) => Application.Current.Dispatcher.BeginInvoke(new Action(OnSystemLookChanged));
+            SystemEvents.UserPreferenceChanged += onPreferences;
 
             if (!settings.Hidden) widget.Show();
             media.Start();
+        }
+
+        private WidgetWindow CreateWidget()
+        {
+            var w = new WidgetWindow(settings, media);
+            w.MenuRequested += () => menu.Show(Forms.Cursor.Position);
+            return w;
+        }
+
+        private void OnSystemLookChanged()
+        {
+            bool light = SystemLook.AppsUseLightTheme, transparency = SystemLook.TransparencyEnabled;
+            if (light == lastLight && transparency == lastTransparency) return;
+            lastLight = light;
+            lastTransparency = transparency;
+            if (settings.ThemeValue == ThemeKind.LiquidGlass) widget.Rebuild();
         }
 
         private void UpdateTrayText(NowPlaying np)
@@ -64,7 +90,7 @@ namespace Coverline
             m.Items.Add(new Forms.ToolStripSeparator());
 
             var themeMenu = new Forms.ToolStripMenuItem("主题 Theme");
-            foreach (ThemeKind kind in new[] { ThemeKind.Editorial, ThemeKind.Glass, ThemeKind.ArtOnly })
+            foreach (ThemeKind kind in new[] { ThemeKind.LiquidGlass, ThemeKind.Editorial, ThemeKind.Glass, ThemeKind.ArtOnly })
             {
                 ThemeKind k = kind;
                 var item = new Forms.ToolStripMenuItem(Theme.NameOf(k)) { Tag = k };
@@ -72,6 +98,13 @@ namespace Coverline
                 themeMenu.DropDownItems.Add(item);
             }
             m.Items.Add(themeMenu);
+
+            backdropMenu = new Forms.ToolStripMenuItem("玻璃背景 Glass backdrop");
+            AddChoice(backdropMenu, "自动 Auto", GlassBackdrop.Auto);
+            AddChoice(backdropMenu, "系统亚克力 System acrylic (Win 11)", GlassBackdrop.SystemAcrylic);
+            AddChoice(backdropMenu, "经典模糊 Classic blur", GlassBackdrop.Blur);
+            AddChoice(backdropMenu, "不透明 Opaque", GlassBackdrop.Off);
+            m.Items.Add(backdropMenu);
 
             var sizeMenu = new Forms.ToolStripMenuItem("尺寸 Size");
             AddChoice(sizeMenu, "小 S", WidgetSize.Small);
@@ -127,6 +160,7 @@ namespace Coverline
                 object v = value;
                 if (v is WidgetSize) settings.SizeValue = (WidgetSize)v;
                 else if (v is WidgetLayout) settings.LayoutValue = (WidgetLayout)v;
+                else if (v is GlassBackdrop) settings.BackdropValue = (GlassBackdrop)v;
                 Apply();
             };
             parent.DropDownItems.Add(item);
@@ -152,11 +186,35 @@ namespace Coverline
                 var mi = i as Forms.ToolStripMenuItem;
                 if (mi != null) mi.Checked = mi.Tag is WidgetLayout && (WidgetLayout)mi.Tag == settings.LayoutValue;
             }
+            bool liquid = settings.ThemeValue == ThemeKind.LiquidGlass;
+            backdropMenu.Enabled = liquid;
+            backdropMenu.ToolTipText = liquid ? null : "仅「液态玻璃」主题使用";
+            if (!SystemLook.TransparencyEnabled && liquid) backdropMenu.ToolTipText = "Windows「透明效果」已关闭，玻璃以不透明面板显示";
+            foreach (Forms.ToolStripItem i in backdropMenu.DropDownItems)
+            {
+                var mi = i as Forms.ToolStripMenuItem;
+                if (mi != null) mi.Checked = mi.Tag is GlassBackdrop && (GlassBackdrop)mi.Tag == settings.BackdropValue;
+            }
             visibleItem.Checked = widget.IsVisible;
         }
 
         private void Apply()
         {
+            if (widget.UsesGlassWindow != WidgetWindow.WantsGlassWindow(settings))
+            {
+                // Layered <-> non-layered: the window has to be recreated (AllowsTransparency is
+                // fixed once a window exists). Keep the card where it was on screen.
+                var old = widget;
+                bool visible = old.IsVisible;
+                double cardLeft = old.Left + old.CardInset, cardTop = old.Top + old.CardInset;
+                bool hadPosition = settings.HasPosition;
+                widget = CreateWidget();
+                if (hadPosition) widget.PlaceCardAt(cardLeft, cardTop);
+                settings.Save();
+                old.Close();
+                if (visible) widget.Show();
+                return;
+            }
             settings.Save();
             widget.Rebuild();
         }
@@ -169,6 +227,7 @@ namespace Coverline
 
         public void Dispose()
         {
+            SystemEvents.UserPreferenceChanged -= onPreferences;
             media.Dispose();
             settings.Save();
             tray.Visible = false;

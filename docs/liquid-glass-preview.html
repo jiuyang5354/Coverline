@@ -1,0 +1,198 @@
+<!doctype html>
+<!--
+  Coverline 0.2 · Liquid Glass — faithful HTML/CSS mock of the WPF widget (Medium size, Art + text,
+  hover state so the control capsule shows). Every number mirrors windows/src/Theme.cs
+  (LiquidGlass) and WidgetWindow.cs (BuildGlassCard / BuildText / BuildCapsule):
+    card 322 x ~128, corner 26, padding 14, art 96 / corner 12, gap 14, text column 184.
+  The "acrylic" layer stands in for the Windows 11 DWM system acrylic (blur + luminosity layer,
+  WinUI AcrylicBackgroundFillColorDefault values). No outer shadow: in the app the rounded window
+  region that clips the backdrop also clips anything outside the card.
+  Render: ?mode=light | ?mode=dark
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --r: 26px; --pad: 14px; --art: 96px; --art-r: 12px; --gap: 14px; --text-w: 184px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 820px; height: 520px; overflow: hidden; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", Inter, "Noto Sans SC", sans-serif; -webkit-font-smoothing: antialiased; }
+
+  /* ---------- wallpaper ---------- */
+  .desk { position: absolute; inset: 0; overflow: hidden; }
+  .light .desk {
+    background:
+      radial-gradient(38% 52% at 18% 30%, #ff9d7a 0%, rgba(255,157,122,0) 70%),
+      radial-gradient(40% 55% at 82% 22%, #8fb6ff 0%, rgba(143,182,255,0) 70%),
+      radial-gradient(45% 60% at 60% 92%, #b49bff 0%, rgba(180,155,255,0) 70%),
+      radial-gradient(35% 45% at 30% 88%, #7fe0c4 0%, rgba(127,224,196,0) 70%),
+      linear-gradient(160deg, #f6efe9 0%, #e4e9f6 55%, #ede6fb 100%);
+  }
+  .dark .desk {
+    background:
+      radial-gradient(36% 50% at 22% 28%, #ff6a3d 0%, rgba(255,106,61,0) 70%),
+      radial-gradient(42% 58% at 80% 30%, #3d34b8 0%, rgba(61,52,184,0) 72%),
+      radial-gradient(40% 55% at 55% 95%, #0f8f8a 0%, rgba(15,143,138,0) 70%),
+      linear-gradient(165deg, #10131f 0%, #0a0d18 60%, #151026 100%);
+  }
+  /* crisp shapes so the blur under the glass is obvious */
+  .orb { position: absolute; border-radius: 50%; }
+  .light .orb.a { width: 210px; height: 210px; left: 470px; top: 236px; background: linear-gradient(140deg, #ff7a59, #ffb36b); }
+  .light .orb.b { width: 120px; height: 120px; left: 236px; top: 300px; background: linear-gradient(140deg, #5b8cff, #9a7bff); }
+  .dark  .orb.a { width: 210px; height: 210px; left: 470px; top: 236px; background: linear-gradient(140deg, #ff5a1f, #ffb04a); }
+  .dark  .orb.b { width: 120px; height: 120px; left: 236px; top: 300px; background: linear-gradient(140deg, #4f6bff, #b05bff); }
+  .stripe { position: absolute; left: 0; right: 0; height: 2px; }
+  .light .stripe { background: rgba(255,255,255,.85); }
+  .dark  .stripe { background: rgba(255,255,255,.55); }
+
+  /* ---------- taskbar (context only) ---------- */
+  .taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 48px; display: flex; align-items: center; justify-content: center; gap: 10px;
+             backdrop-filter: blur(40px) saturate(150%); -webkit-backdrop-filter: blur(40px) saturate(150%); }
+  .light .taskbar { background: rgba(240,242,246,.78); border-top: 1px solid rgba(255,255,255,.7); }
+  .dark  .taskbar { background: rgba(28,30,36,.82); border-top: 1px solid rgba(255,255,255,.08); }
+  .taskbar i { width: 24px; height: 24px; border-radius: 6px; display: block; }
+  .light .taskbar i { background: rgba(28,28,30,.16); }
+  .dark  .taskbar i { background: rgba(255,255,255,.18); }
+  .taskbar i:first-child { background: linear-gradient(135deg,#3b82f6,#06b6d4); }
+  .clock { position: absolute; right: 18px; font: 500 11px/1.25 "Segoe UI", Inter, sans-serif; text-align: right; }
+  .light .clock { color: rgba(28,28,30,.85); } .dark .clock { color: rgba(255,255,255,.85); }
+
+  /* ---------- the widget ---------- */
+  .card { position: absolute; left: 249px; top: 320px; /* bottom-centre, 24px above the taskbar */
+          border-radius: var(--r); overflow: hidden; }
+  .layer { position: absolute; inset: 0; border-radius: var(--r); pointer-events: none; }
+
+  /* Windows 11 DWM system acrylic stand-in */
+  .acrylic { backdrop-filter: blur(30px) saturate(125%); -webkit-backdrop-filter: blur(30px) saturate(125%); }
+  .lum { mix-blend-mode: luminosity; }
+  .light .lum { background: rgba(252,252,252,.85); }
+  .dark  .lum { background: rgba(44,44,44,.96); }
+  .dark  .acrylic-tint { background: rgba(44,44,44,.15); }
+
+  /* WPF layers (Theme.LiquidGlass) */
+  .light .tint { background: rgba(255,255,255,.141); }          /* #24FFFFFF */
+  .dark  .tint { background: rgba(16,16,20,.102); }             /* #1A101014 */
+  .cover-tint { background: rgb(214,112,96); }
+  .light .cover-tint { opacity: .14; } .dark .cover-tint { opacity: .20; }
+  .light .sheen { background: linear-gradient(180deg, rgba(255,255,255,.30) 0%, rgba(255,255,255,0) 48%, rgba(0,0,0,.031) 100%); }
+  .dark  .sheen { background: linear-gradient(180deg, rgba(255,255,255,.10) 0%, rgba(255,255,255,0) 48%, rgba(0,0,0,.12) 100%); }
+  .light .spec { background: radial-gradient(55% 95% at 16% 2%, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 100%); }
+  .dark  .spec { background: radial-gradient(55% 95% at 16% 2%, rgba(255,255,255,.28) 0%, rgba(255,255,255,0) 100%); }
+  .specline { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  .light .specline { opacity: .9; } .dark .specline { opacity: .55; }
+
+  /* 1px rims drawn as gradient borders */
+  .rim, .rim2 { padding: 1px; -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+  .light .rim  { background: linear-gradient(180deg, rgba(255,255,255,.85), rgba(255,255,255,.25) 50%, rgba(0,0,0,.10)); }
+  .dark  .rim  { background: linear-gradient(180deg, rgba(255,255,255,.38), rgba(255,255,255,.10) 50%, rgba(0,0,0,.45)); }
+  .rim2 { inset: 1px; border-radius: calc(var(--r) - 1px); }
+  .light .rim2 { background: linear-gradient(180deg, rgba(255,255,255,.40), rgba(255,255,255,0) 35%); }
+  .dark  .rim2 { background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,0) 35%); }
+
+  .content { position: relative; z-index: 1; display: flex; align-items: center; padding: var(--pad); gap: var(--gap); }
+
+  .art { position: relative; width: var(--art); height: var(--art); flex: none; border-radius: var(--art-r); overflow: hidden;
+         box-shadow: 0 3px 12px rgba(0,0,0,.18);
+         background:
+           radial-gradient(60% 60% at 30% 28%, #ffd59a 0%, rgba(255,213,154,0) 60%),
+           radial-gradient(70% 70% at 78% 80%, #7b4dff 0%, rgba(123,77,255,0) 65%),
+           conic-gradient(from 210deg at 55% 50%, #ff7a59, #ff4f8b, #b45cff, #ff9a5a, #ff7a59); }
+  .dark .art { box-shadow: 0 3px 12px rgba(0,0,0,.30); }
+  .art::after { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+                background: linear-gradient(180deg, rgba(255,255,255,.30), rgba(255,255,255,.08) 50%, rgba(0,0,0,.16));
+                -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+
+  .text { position: relative; width: var(--text-w); }
+  .scrim { position: absolute; left: -12px; top: -10px; right: -8px; bottom: -10px; pointer-events: none; }
+  .light .scrim { background: radial-gradient(62% 62% at 45% 50%, rgba(255,255,255,.20) 0%, rgba(255,255,255,.20) 55%, rgba(255,255,255,0) 100%); }
+  .dark  .scrim { background: radial-gradient(62% 62% at 45% 50%, rgba(0,0,0,.14) 0%, rgba(0,0,0,.14) 55%, rgba(0,0,0,0) 100%); }
+  .words { position: relative; }
+  .label { display: flex; align-items: center; margin-bottom: 8px; font: 400 9px/12px "Cascadia Mono", Consolas, "JetBrains Mono", monospace; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dot { width: 5px; height: 5px; border-radius: 50%; margin-right: 7px; flex: none; }
+  .title { font: 600 15px/19px "Segoe UI Variable Display", "Segoe UI", Inter, "Noto Sans SC", sans-serif; max-height: 38px; overflow: hidden; }
+  .artist { margin-top: 5px; font: 400 12px/16px "Segoe UI Variable Text", "Segoe UI", Inter, "Noto Sans SC", sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .light .label { color: rgba(28,28,30,.52); } .light .dot { background: #1c1c1e; }
+  .light .title { color: #1c1c1e; } .light .artist { color: rgba(28,28,30,.64); }
+  .dark .label { color: rgba(255,255,255,.52); } .dark .dot { background: #fff; }
+  .dark .title { color: #fff; } .dark .artist { color: rgba(255,255,255,.68); }
+
+  .capsule { position: relative; display: inline-flex; align-items: center; margin-top: 9px; padding: 1px 4px; border-radius: 15.5px; }
+  .capsule::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+                     -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+  .light .capsule { background: rgba(255,255,255,.38); }
+  .light .capsule::before { background: linear-gradient(180deg, rgba(255,255,255,.90), rgba(255,255,255,.20) 50%, rgba(0,0,0,.08)); }
+  .dark .capsule { background: rgba(255,255,255,.10); }
+  .dark .capsule::before { background: linear-gradient(180deg, rgba(255,255,255,.30), rgba(255,255,255,.08) 50%, rgba(0,0,0,.30)); }
+  .btn { position: relative; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; }
+  .btn.play { width: 27px; height: 27px; }
+  .btn.hover { background: rgba(255,255,255,.75); }
+  .dark .btn.hover { background: rgba(255,255,255,.18); }
+  .btn svg { width: 40%; height: 40%; }
+  .light .btn svg { fill: rgba(28,28,30,.90); } .dark .btn svg { fill: rgba(255,255,255,.95); }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="desk">
+    <div class="stripe" style="top:372px"></div>
+    <div class="orb a"></div>
+    <div class="orb b"></div>
+  </div>
+
+  <div class="card">
+    <div class="layer acrylic"></div>
+    <div class="layer lum"></div>
+    <div class="layer acrylic-tint"></div>
+    <div class="layer tint"></div>
+    <div class="layer cover-tint"></div>
+    <div class="layer sheen"></div>
+    <div class="layer spec"></div>
+    <svg class="specline" width="100" height="70" viewBox="0 0 100 70">
+      <defs>
+        <linearGradient id="lg" gradientUnits="userSpaceOnUse" x1="0" y1="62.4" x2="93.6" y2="0">
+          <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+          <stop offset=".42" stop-color="#fff" stop-opacity="1"/>
+          <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+        </linearGradient>
+        <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation=".6"/></filter>
+      </defs>
+      <path d="M1.5,62.4 L1.5,26 A24.5,24.5 0 0 1 26,1.5 L93.6,1.5" fill="none" stroke="url(#lg)" stroke-width="1.2" filter="url(#soft)"/>
+    </svg>
+
+    <div class="content">
+      <div class="art"></div>
+      <div class="text">
+        <div class="scrim"></div>
+        <div class="words">
+          <div class="label"><span class="dot"></span>NOW PLAYING · SPOTIFY</div>
+          <div class="title">晴天</div>
+          <div class="artist">周杰伦 · 叶惠美</div>
+        </div>
+        <div class="capsule">
+          <span class="btn"><svg viewBox="0 0 16 16"><path d="M2,2 L4,2 L4,14 L2,14 Z M14,2 L5,8 L14,14 Z"/></svg></span>
+          <span class="btn play hover"><svg viewBox="0 0 16 16"><path d="M3,2 L6.5,2 L6.5,14 L3,14 Z M9.5,2 L13,2 L13,14 L9.5,14 Z"/></svg></span>
+          <span class="btn"><svg viewBox="0 0 16 16"><path d="M12,2 L14,2 L14,14 L12,14 Z M2,2 L11,8 L2,14 Z"/></svg></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="layer rim"></div>
+    <div class="layer rim2"></div>
+  </div>
+
+  <div class="taskbar"><i></i><i></i><i></i><i></i><i></i><div class="clock">14:08<br>2026/10/27</div></div>
+</div>
+<script>
+  const mode = new URLSearchParams(location.search).get('mode') || 'light';
+  document.getElementById('root').className = mode;
+  // centre the card horizontally and park it 24px above the taskbar, like the app's default spot
+  const card = document.querySelector('.card');
+  const r = card.getBoundingClientRect();
+  card.style.left = Math.round((820 - r.width) / 2) + 'px';
+  card.style.top = Math.round(520 - 48 - 24 - r.height) + 'px';
+  document.title = 'card ' + Math.round(r.width) + 'x' + Math.round(r.height);
+</script>
+</body>
+</html>

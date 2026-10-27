@@ -8,9 +8,12 @@ using Microsoft.Win32;
 
 namespace Coverline
 {
-    internal enum ThemeKind { Editorial, Glass, ArtOnly }
+    internal enum ThemeKind { Editorial, Glass, ArtOnly, LiquidGlass }
     internal enum WidgetSize { Small, Medium, Large }
     internal enum WidgetLayout { ArtText, ArtOnly, TextOnly }
+    // What sits behind the Liquid Glass card. Auto = system acrylic on Windows 11 22H2+,
+    // acrylic blur-behind on Windows 10, opaque panel when neither is available.
+    internal enum GlassBackdrop { Auto, SystemAcrylic, Blur, Off }
 
     // Persisted as %AppData%\Coverline\settings.json. Enum values are stored as strings so the
     // file stays readable and survives reordering.
@@ -26,6 +29,10 @@ namespace Coverline
         [DataMember(Name = "left")] public double Left;
         [DataMember(Name = "top")] public double Top;
         [DataMember(Name = "hidden")] public bool Hidden;
+        [DataMember(Name = "backdrop")] public string Backdrop;
+        // True once the user has dragged the widget. v0.1 files lack it, so a v0.1 auto-placed
+        // position (top-right, over desktop icons) is replaced by the new default on upgrade.
+        [DataMember(Name = "userMoved")] public bool UserMoved;
 
         public Settings()
         {
@@ -41,7 +48,8 @@ namespace Coverline
 
         private void SetDefaults()
         {
-            Theme = ThemeKind.Editorial.ToString();
+            // New installs start on Liquid Glass; existing settings.json files keep their theme.
+            Theme = ThemeKind.LiquidGlass.ToString();
             Size = WidgetSize.Medium.ToString();
             Layout = WidgetLayout.ArtText.ToString();
             ShowControls = true;
@@ -50,11 +58,13 @@ namespace Coverline
             Left = 0;
             Top = 0;
             Hidden = false;
+            Backdrop = GlassBackdrop.Auto.ToString();
+            UserMoved = false;
         }
 
         public ThemeKind ThemeValue
         {
-            get { return Parse(Theme, ThemeKind.Editorial); }
+            get { return Parse(Theme, ThemeKind.LiquidGlass); }
             set { Theme = value.ToString(); }
         }
 
@@ -62,6 +72,12 @@ namespace Coverline
         {
             get { return Parse(Size, WidgetSize.Medium); }
             set { Size = value.ToString(); }
+        }
+
+        public GlassBackdrop BackdropValue
+        {
+            get { return Parse(Backdrop, GlassBackdrop.Auto); }
+            set { Backdrop = value.ToString(); }
         }
 
         public WidgetLayout LayoutValue
