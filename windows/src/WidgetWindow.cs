@@ -252,6 +252,9 @@ namespace Coverline
 
         public event Action MenuRequested;
 
+        // The pointer is over the card (the updater waits for this to be false before restarting).
+        public bool IsHovering { get { return hovering && IsVisible; } }
+
         public WidgetWindow(Settings settings, MediaWatcher media)
         {
             this.settings = settings;

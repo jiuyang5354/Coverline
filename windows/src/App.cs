@@ -18,6 +18,9 @@ namespace Coverline
         private Forms.ToolStripMenuItem layoutMenu;
         private Forms.ToolStripMenuItem visibleItem;
         private Forms.ToolStripMenuItem backdropMenu;
+        private readonly Updater updater;
+        private Forms.ToolStripMenuItem installItem;
+        private Action balloonClick;
         private readonly UserPreferenceChangedEventHandler onPreferences;
         private bool lastLight;
         private bool lastTransparency;
@@ -47,6 +50,35 @@ namespace Coverline
 
             if (!settings.Hidden) widget.Show();
             media.Start();
+
+            updater = new Updater(a => Application.Current.Dispatcher.BeginInvoke(a));
+            updater.IsIdle = () => !media.Current.IsPlaying && !widget.IsHovering && !menu.Visible;
+            updater.AutoEnabled = () => settings.AutoUpdate;
+            updater.Notify += (text, click) => ShowBalloon(text, click);
+            updater.StateChanged += UpdateInstallItem;
+            updater.ExitRequested += () => Application.Current.Shutdown();
+            tray.BalloonTipClicked += delegate
+            {
+                var click = balloonClick;
+                balloonClick = null;
+                if (click != null) click();
+            };
+            updater.Start();
+        }
+
+        private void ShowBalloon(string text, Action click)
+        {
+            balloonClick = click;
+            try { tray.ShowBalloonTip(6000, AppInfo.Name, text, Forms.ToolTipIcon.Info); }
+            catch (Exception ex) { Log.Write("balloon: " + ex.Message); }
+        }
+
+        private void UpdateInstallItem()
+        {
+            if (installItem == null) return;
+            string ready = updater != null ? updater.ReadyVersion : null;
+            installItem.Visible = ready != null;
+            if (ready != null) installItem.Text = "重启并更新到 " + ready + " Restart to update";
         }
 
         private WidgetWindow CreateWidget()
@@ -134,6 +166,18 @@ namespace Coverline
             m.Items.Add(startup);
 
             m.Items.Add("重置位置 Reset position", null, delegate { if (!widget.IsVisible) SetVisible(true); widget.ResetPosition(); });
+
+            m.Items.Add(new Forms.ToolStripSeparator());
+
+            var version = new Forms.ToolStripMenuItem("版本 Version v" + AppInfo.Version) { Enabled = false };
+            m.Items.Add(version);
+            m.Items.Add("检查更新 Check for updates", null, delegate { updater.Check(true); });
+            var auto = new Forms.ToolStripMenuItem("自动更新 Auto update") { Checked = settings.AutoUpdate, CheckOnClick = true };
+            auto.CheckedChanged += delegate { settings.AutoUpdate = auto.Checked; settings.Save(); };
+            m.Items.Add(auto);
+            installItem = new Forms.ToolStripMenuItem("重启并更新 Restart to update") { Visible = false };
+            installItem.Click += delegate { updater.ApplyNow(); };
+            m.Items.Add(installItem);
 
             m.Items.Add(new Forms.ToolStripSeparator());
             m.Items.Add("关于 " + AppInfo.Name, null, delegate
@@ -227,6 +271,7 @@ namespace Coverline
 
         public void Dispose()
         {
+            if (updater != null) updater.Dispose();
             SystemEvents.UserPreferenceChanged -= onPreferences;
             media.Dispose();
             settings.Save();

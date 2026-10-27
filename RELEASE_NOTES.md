@@ -1,15 +1,12 @@
-Coverline v0.2：液态玻璃。
+Coverline v0.3：自动更新。
 
-- 新主题「液态玻璃 Liquid Glass」，并设为新安装的默认主题（已有设置的用户保持原主题，可在托盘「主题」切换）：
-  - 窗口背后是真模糊：Windows 11 22H2+ 用系统亚克力，Windows 10 用亚克力模糊，都不可用时退回不透明面板。
-  - 极淡白色着色、上亮下暗的光线、1px 斜面内描边、左上角弧形镜面高光、26px 大圆角；封面内嵌在玻璃里，封面主色淡淡渗进玻璃。
-  - 深 / 浅色跟随 Windows 应用模式，文字背后有柔光 scrim，任何壁纸上都清楚。
-  - 上一首 / 播放暂停 / 下一首放进小玻璃胶囊，悬停柔光、按下回弹。
-  - Windows「透明效果」关闭时改为高对比不透明面板；托盘新增「玻璃背景」：自动 / 系统亚克力 / 经典模糊 / 不透明。
-- 修复：QQ 音乐等连续发送更新的播放器上，标题和艺人可能一直不显示（卡在透明度 0）。
-- 修复：编辑部主题卡片改为完全不透明，桌面图标不再透出。
-- 默认位置改为主屏幕底部居中、任务栏上方，不再压住右上角的桌面图标；拖动过才记住位置（v0.1 自动摆放的位置会在升级后重新摆放），托盘「重置位置」回到默认处。
+- 新增自动更新：启动 30 秒后、之后每 6 小时检查 GitHub Releases（包括预发布版），后台下载并用 SHA256SUMS.txt 校验，没有播放音乐且鼠标不在组件上时静默重启完成更新；旧版备份为 Coverline.old.exe，替换失败自动回滚。更新后首次启动会提示「已更新到 vX.Y.Z」。
+- 托盘菜单新增：当前版本号、「检查更新」（立即检查，气泡显示结果；下载好后点气泡可立即更新）、「自动更新」开关（默认开启）。
+- 安装目录不可写（如 Program Files）时不会请求管理员权限，只提示并打开 Releases 页面。
+- 离线、超时、GitHub 限流时静默跳过；日志写在 %LocalAppData%\Coverline\update.log。
 
-New in v0.2: Liquid Glass theme (default for new installs) with real DWM / accent blur, bevel rim, specular highlight and cover-tinted glass; legible type on any wallpaper; glass control capsule. Fixes the v0.1 blank title/artist with QQ Music and similar players, and moves the default spot to bottom-centre above the taskbar.
+**v0.2.0 及更早版本需要手动下载一次 v0.3.0**（解压覆盖旧文件即可，设置会保留），之后的版本会自动更新。
 
-需要 Windows 10 1809 或更高版本。尚未在 Windows 实机上全面测试玻璃效果，欢迎反馈。灵感来自 Mac 应用 Sleeve（Replay Software），本项目为独立实现，与其无关联。
+New in v0.3: auto update. Coverline checks GitHub Releases (prereleases included) 30 s after launch and every 6 hours, downloads and verifies the new build against SHA256SUMS.txt, and installs it when idle (nothing playing, pointer not on the widget), keeping Coverline.old.exe and rolling back if the swap fails. Tray menu gains the version, Check for updates and an Auto update switch (on by default). Read-only install folders get a notification and the Releases page instead of an admin prompt. **v0.2.0 and earlier: download v0.3.0 manually once; it updates itself from then on.**
+
+需要 Windows 10 1809 或更高版本。程序未签名，首次运行可能出现 SmartScreen 提示。灵感来自 Mac 应用 Sleeve（Replay Software），本项目为独立实现，与其无关联。

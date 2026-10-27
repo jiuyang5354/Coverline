@@ -35,12 +35,25 @@ A now-playing widget for the Windows desktop: album art, title and artist sit qu
   - 尺寸：小 / 中 / 大
   - 布局：封面 + 文字 / 仅封面 / 仅文字
   - 悬停时显示播放控制、置顶显示、开机自动启动、重置位置、退出
+  - 当前版本、检查更新、自动更新开关（v0.3+）
 - 单击托盘图标显示 / 隐藏组件
 - 设置保存为 JSON：`%AppData%\Coverline\settings.json`
 
 ## 下载与运行
 
 在 [Releases](../../releases) 下载 `Coverline-Windows-vX.Y.Z.zip`，解压后运行 `Coverline.exe`。程序常驻托盘，无需安装。需要 Windows 10 1809 或更高版本 / Windows 11（系统自带 .NET Framework 4.8）。
+
+## 自动更新 Auto update（v0.3+）
+
+- 启动 30 秒后检查一次，之后每 6 小时检查一次本仓库的 [Releases](../../releases)（包括预发布版本）。
+- 发现新版本后在后台下载到 `%LocalAppData%\Coverline\updates\`，用同一 Release 里的 `SHA256SUMS.txt` 校验，哈希不一致就丢弃。
+- **空闲时安装**：没有在播放音乐、鼠标也不在组件上时，Coverline 会静默退出、替换文件（旧版备份为 `Coverline.old.exe`，失败自动回滚）并重新启动；重启后托盘气泡提示「已更新到 vX.Y.Z」。正在播放时会一直等到下次空闲。
+- 托盘菜单：**检查更新**（立即检查并用气泡告诉你结果，下载好后点气泡可立即重启更新）、**自动更新**开关（默认开启；关闭后不再后台检查，手动检查仍可用）、当前版本号。
+- 如果 Coverline 放在不可写的目录（例如 `C:\Program Files`），不会请求管理员权限，只会弹出通知并打开 Releases 页面，请手动下载。建议把 Coverline 放在自己的文件夹里，例如 `%LocalAppData%\Programs\Coverline`。
+- 日志：`%LocalAppData%\Coverline\update.log`。网络不可用、超时或 GitHub 限流时静默跳过，下次再试。
+- **v0.2.0 及更早的版本没有自动更新**：请手动下载一次 v0.3.0 覆盖旧文件，之后的版本都会自动更新。
+
+**Auto update (v0.3+)**: Coverline checks this repo's Releases (prereleases included) 30 seconds after launch and every 6 hours, downloads the new zip to `%LocalAppData%\Coverline\updates\`, verifies it against `SHA256SUMS.txt`, and installs it when idle — nothing playing and the pointer not on the widget — by quitting, swapping the files (old exe kept as `Coverline.old.exe`, rolled back on failure) and relaunching. You get a "Updated to vX.Y.Z" balloon afterwards. Tray → Check for updates / Auto update (on by default). If the folder isn't writable (e.g. Program Files) it never asks for admin rights; it notifies you and opens the Releases page instead. Log: `%LocalAppData%\Coverline\update.log`. **v0.2.0 and earlier can't update themselves: download v0.3.0 once by hand; updates are automatic from then on.**
 
 ## 构建
 
@@ -62,6 +75,7 @@ dotnet build -c Release
 - 液态玻璃为了让 DWM 在窗口背后画模糊，使用普通（非分层）窗口 + 圆角窗口区域：因此没有外投影，大圆角边缘在 100% 缩放下可能有轻微锯齿；Windows 10 的 accent 亚克力在拖动窗口时可能略有延迟。
 - 液态玻璃的深浅色跟随系统「应用模式」，不是逐像素检测壁纸亮度；若某张壁纸上不满意，可在托盘「玻璃背景」改为「不透明」或切换系统深浅色。
 - 系统亚克力在部分 Windows 11 版本上对不活动窗口可能显示为纯色；遇到时在「玻璃背景」选「经典模糊」。
+- 自动更新通过隐藏的 PowerShell 脚本替换文件；若组策略禁止运行 PowerShell，更新会失败并保留旧版本，请手动下载。新下载的 exe 首次运行时，Windows SmartScreen 可能提示「未知发布者」（程序未签名）。
 - Liquid Glass uses a non-layered window with a rounded region so DWM can blur behind it: no outer shadow, slight corner aliasing at 100% scaling, and Windows 10 accent acrylic can lag while dragging. Light/dark follows the Windows app mode rather than sampling the wallpaper.
 
 ## v0.1 「空白卡片」问题 / The v0.1 blank-card bug

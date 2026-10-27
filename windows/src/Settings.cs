@@ -33,6 +33,8 @@ namespace Coverline
         // True once the user has dragged the widget. v0.1 files lack it, so a v0.1 auto-placed
         // position (top-right, over desktop icons) is replaced by the new default on upgrade.
         [DataMember(Name = "userMoved")] public bool UserMoved;
+        // Check GitHub Releases, download in the background and install when idle (v0.3+).
+        [DataMember(Name = "autoUpdate")] public bool AutoUpdate;
 
         public Settings()
         {
@@ -60,6 +62,7 @@ namespace Coverline
             Hidden = false;
             Backdrop = GlassBackdrop.Auto.ToString();
             UserMoved = false;
+            AutoUpdate = true;
         }
 
         public ThemeKind ThemeValue
